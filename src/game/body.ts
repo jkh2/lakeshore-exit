@@ -5,7 +5,7 @@ import * as THREE from "three";
 // placed in an "eye frame": origin at the eyes, -z forward, +y up. The caller
 // supplies that frame each phase.
 
-export type BodyMode = "hidden" | "cabin" | "freefall" | "canopy" | "down";
+export type BodyMode = "hidden" | "cabin" | "seated" | "freefall" | "canopy" | "down";
 export type Gesture = "pull" | "cutaway" | "reserve";
 
 export type BodyPose = {
@@ -390,6 +390,9 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
           const flap = Math.min(pose.air / 55, 1) * 0.012;
           tmp.x += Math.sin(pose.time * 31 + s) * flap;
           tmp.y += Math.cos(pose.time * 27 + s * 2) * flap;
+        } else if (pose.mode === "seated") {
+          // Astride a bench, hands resting on the thighs.
+          tmp.set(s * 0.2, -0.86, -0.3);
         } else if (pose.mode === "cabin") {
           // Crouched under the low cabin roof, hands ready in front of the thighs.
           const swing = Math.sin(pose.walk) * 0.06 * s;
@@ -479,6 +482,9 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
           // Belly-to-earth: knees down, shins up behind. Tracking straightens the legs.
           tmp.set(s * 0.2, -1.38, 0.32).lerp(_a.set(s * 0.13, -1.62, 0.12), trackAmt);
           tp(tmp, tmp.x, tmp.y, tmp.z);
+        } else if (pose.mode === "seated") {
+          // Straddling a bench: feet flat on the floor either side of it.
+          tmp.set(s * 0.33, -1.49, -0.14);
         } else if (pose.mode === "cabin") {
           // The Twin Otter cabin is too low to stand straight; knees stay bent.
           const stride = Math.sin(pose.walk + (s > 0 ? Math.PI : 0)) * 0.12;
@@ -493,6 +499,7 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         }
         leg.footPos.lerp(tmp, 1 - Math.exp(-9 * dt));
         if (prone) tp(pole, s * 0.24, -1.1, -0.9);
+        else if (pose.mode === "seated") pole.set(hip.x + s * 0.7, hip.y - 0.05, hip.z - 0.6);
         else pole.set(hip.x + s * 0.1, hip.y - 0.2, hip.z - 0.8);
         solve(knee, hip, leg.footPos, pole, THIGH, SHIN);
         const ankle = _a.subVectors(leg.footPos, knee).setLength(SHIN).add(knee);
