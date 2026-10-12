@@ -19,7 +19,9 @@ import type { Bridge, Hud, Outcome, Phase } from "./types";
 import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
 import { BASE_FALL, BREAKOFF_FT, createFormation } from "./formation";
-import { SUN_DIR, cityTexture, cloudTexture, createAtmosphere, createWaterMaterial } from "./world";
+import { createCloudField } from "./clouds";
+import { createStreaks } from "./streaks";
+import { SUN_DIR, cityTexture, createAtmosphere, createWaterMaterial } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
 
@@ -663,26 +665,6 @@ export function mountGame(
     boats.push(b);
   }
 
-  const cTex = cloudTexture(21);
-  const clouds: THREE.Sprite[] = [];
-  if (cTex) {
-    const cMat = new THREE.SpriteMaterial({ map: cTex, transparent: true, depthWrite: false, fog: false });
-    const cloudRnd = mulberry(21);
-    for (let i = 0; i < 16; i++) {
-      const puff = new THREE.Sprite(cMat);
-      const w = 480 + cloudRnd() * 1200;
-      puff.scale.set(w, w * (0.32 + cloudRnd() * 0.18), 1);
-      const high = i < 6;
-      puff.position.set(
-        -900 + cloudRnd() * 2600,
-        high ? 4300 + cloudRnd() * 900 : 700 + cloudRnd() * 1700,
-        -1800 + cloudRnd() * 3600,
-      );
-      scene.add(puff);
-      clouds.push(puff);
-    }
-  }
-
   const plane = new THREE.Group();
   scene.add(plane);
   const paint = new THREE.MeshStandardMaterial({ color: "#f3f6f8", roughness: 0.42, metalness: 0.22 });
@@ -818,6 +800,11 @@ export function mountGame(
   const body = createBody();
   scene.add(body.group);
   const formation = createFormation(scene);
+  // Phones get fewer, bigger puffs: the same clouds for less overdraw.
+  const cloudField = createCloudField(scene, coarse ? 0.6 : 1);
+  const streaks = createStreaks(scene);
+  let cloudDensity = 0;
+  let cloudLogged = false;
   canopy.visible = false;
   scene.add(canopy);
   const streamer = new THREE.Group();
@@ -958,6 +945,7 @@ export function mountGame(
     warnedDecision = false;
     beepAcc = 0;
     flashText = "";
+    cloudLogged = false;
     canopy.visible = false;
     streamer.visible = false;
     resetFormation();
@@ -1386,10 +1374,6 @@ export function mountGame(
       if (!boat) continue;
       boat.position.z += dt * (6 + i);
       if (boat.position.z > 1800) boat.position.z = -1800;
-    }
-    for (const puff of clouds) {
-      puff.position.x += dt * 2.2;
-      if (puff.position.x > 2000) puff.position.x = -1600;
     }
     ferris.position.y = 30 + Math.sin(simTime * 0.6) * 0;
 
@@ -1931,6 +1915,27 @@ export function mountGame(
     body.update(bodyFrame, p, dt);
   }
 
+  const airVel = new THREE.Vector3();
+
+  // Clouds and the air rushing past: how deep in cloud the eye is, the whiteout veil, and
+  // streaks that scale with airspeed (and thicken inside a cloud).
+  function airFx() {
+    cloudDensity = cloudField.update(camera, fog.near, fog.far);
+    const falling = phase === "freefall" || phase === "deploying" || phase === "malfunction";
+    const aloft = falling || phase === "canopy";
+    if (aloft && cloudDensity > 0.6 && !cloudLogged) {
+      cloudLogged = true;
+      pushLog(
+        `Through a cloud at ${Math.round(pos.y * FT_PER_M).toLocaleString("en-US")} ft · real jumps keep clear of clouds`,
+      );
+    }
+    airVel.set(vel.x - WIND_X, vel.y, vel.z - WIND_Z);
+    let amount = 0;
+    if (falling) amount = clamp(airVel.length() / 60, 0, 1) * 0.55 + cloudDensity * 0.45;
+    else if (phase === "canopy") amount = 0.12 + cloudDensity * 0.6;
+    streaks.update(camera.position, airVel, reduce ? 0 : amount);
+  }
+
   function audioMix() {
     audio.setMuted(bridge.muted);
     const air = Math.hypot(vel.x, vel.y, vel.z);
@@ -1969,6 +1974,7 @@ export function mountGame(
       guard++;
     }
     frameCamera(frameDt);
+    airFx();
     poseBody(frameDt);
     formation.draw(frameDt, simTime);
     audioMix();
@@ -2097,6 +2103,8 @@ export function mountGame(
     audio.dispose();
     atmo.dispose();
     canopyRig.dispose();
+    cloudField.dispose();
+    streaks.dispose();
     body.dispose();
     formation.dispose();
     normalTex.dispose();

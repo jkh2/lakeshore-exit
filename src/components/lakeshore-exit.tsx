@@ -190,7 +190,7 @@ export function LakeshoreExit() {
       <div className="visor pointer-events-none absolute inset-0" />
 
       {showHud ? (
-        <div className="pointer-events-none absolute inset-0">
+        <div className="hud-ink pointer-events-none absolute inset-0">
           <div
             ref={doorRef}
             className="absolute -translate-x-1/2 -translate-y-1/2 font-display text-sm tracking-widest text-amber"

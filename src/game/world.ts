@@ -13,7 +13,7 @@ const SKY = {
 
 // three.js applies fog after tone mapping, so the haze that ties ground, lake and
 // sky together is a display-space color shared by all three.
-const HAZE_SRGB = new THREE.Vector3(0.8, 0.85, 0.9);
+export const HAZE_SRGB = new THREE.Vector3(0.8, 0.85, 0.9);
 export const HAZE_DISPLAY = new THREE.Color().setRGB(HAZE_SRGB.x, HAZE_SRGB.y, HAZE_SRGB.z, THREE.SRGBColorSpace);
 
 export function rng(seed: number) {
@@ -256,7 +256,7 @@ export function cityTexture(seed: number, size: number, blocks: number, aniso: n
   return tex;
 }
 
-function valueNoise(seed: number) {
+export function valueNoise(seed: number) {
   const perm = new Uint8Array(512);
   const r = rng(seed);
   const p = Array.from({ length: 256 }, (_, i) => i);
@@ -279,57 +279,6 @@ function valueNoise(seed: number) {
     const d = val(xi + 1, yi + 1);
     return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
   };
-}
-
-// A cumulus puff with a lit top and a shaded, flatter base.
-export function cloudTexture(seed: number) {
-  const size = 256;
-  const c = document.createElement("canvas");
-  c.width = size;
-  c.height = size;
-  const g = c.getContext("2d");
-  if (!g) return null;
-  const r = rng(seed);
-  const n = valueNoise(seed * 7 + 1);
-  const blobs: Array<[number, number, number]> = [];
-  for (let i = 0; i < 7; i++) {
-    const t = i / 6;
-    blobs.push([0.22 + t * 0.56 + (r() - 0.5) * 0.08, 0.6 - Math.sin(t * Math.PI) * (0.12 + r() * 0.1), 0.13 + r() * 0.1]);
-  }
-  const img = g.createImageData(size, size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = x / size;
-      const v = y / size;
-      let d = 0;
-      for (const [bx, by, br] of blobs) {
-        const dx = (u - bx) / br;
-        const dy = (v - by) / (br * 0.85);
-        d = Math.max(d, 1 - Math.sqrt(dx * dx + dy * dy));
-      }
-      let f = 0;
-      let amp = 0.5;
-      let freq = 6;
-      for (let o = 0; o < 4; o++) {
-        f += n(u * freq, v * freq) * amp;
-        amp *= 0.5;
-        freq *= 2;
-      }
-      const base = 1 - clamp01((v - 0.66) / 0.06);
-      const edge = clamp01(Math.min(u, 1 - u, v, 1 - v) * 10);
-      const dens = clamp01((d + (f - 0.5) * 0.55) * 2.4) * base * edge;
-      const light = clamp01(0.55 + (0.6 - v) * 1.3 + (f - 0.5) * 0.5);
-      const i = (y * size + x) * 4;
-      img.data[i] = Math.round(178 + light * 77);
-      img.data[i + 1] = Math.round(188 + light * 67);
-      img.data[i + 2] = Math.round(204 + light * 51);
-      img.data[i + 3] = Math.round(dens * 255);
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
 }
 
 export function createWaterMaterial(normals: THREE.Texture, haze: THREE.Color, zenith: THREE.Color, shoreX: number) {

@@ -21,6 +21,7 @@ The dev server listens on port 8080.
 - Cabin: mouse look, WASD to walk. Space only jumps from the door.
 - Freefall: mouse is body attitude. A/D turn, W arches, S dives.
 - Two jumpers leave just ahead of you and build a base with a slot open for you. Fly to the BASE marker and face in to dock. At 5,500 ft everyone breaks off: turn away, track, and get clear before you pull.
+- A cumulus deck sits around 6,000 ft. You fall straight through it: the world goes white, then opens up below. Real jumpers keep clear of clouds; here you get to feel one.
 - Canopy: A/D turn, W drives, S flares. Face the lake and land into the wind.
 - Audible altimeter and a full-screen banner at 4,500 ft. Pull-now at 3,000. Hard deck at 2,000.
 - A bad main is a streamer or a line twist. Cut away, then deploy the reserve. Too low and you go in.
