@@ -1,7 +1,9 @@
 import * as THREE from "three";
 
-// The jumper's own body, seen in first person. Everything is placed in an "eye frame":
-// origin at the eyes, -z forward, +y up. The engine supplies that frame each phase.
+// A jumper's body. The player's own is seen in first person; other jumpers use the
+// same rig in third person with a head, helmet and container added. Everything is
+// placed in an "eye frame": origin at the eyes, -z forward, +y up. The caller
+// supplies that frame each phase.
 
 export type BodyMode = "hidden" | "cabin" | "freefall" | "canopy" | "down";
 export type Gesture = "pull" | "cutaway" | "reserve";
@@ -27,15 +29,23 @@ export type BodyPose = {
   time: number;
   /** Deploying or malfunctioning: hands go up to the risers. */
   reaching: boolean;
+  /** Third person: 0 upright .. 1 lying belly-to-earth. */
+  lean?: number;
+  /** Third person: 0..1 tracking, arms swept back and legs straight. */
+  trackAmt?: number;
 };
+
+export type BodyLook = { suit: string; suitDark: string; helmet: string };
+
+/** Standing eye height above the feet. */
+export const EYE_UP = 1.6;
 
 const UPPER = 0.3;
 const FORE = 0.29;
 const THIGH = 0.43;
 const SHIN = 0.42;
 
-const SUIT = "#2c5a8c";
-const SUIT_DARK = "#1d3d61";
+const PLAYER_LOOK: BodyLook = { suit: "#2c5a8c", suitDark: "#1d3d61", helmet: "#e9ecef" };
 const GLOVE = "#17191c";
 const SHOE = "#2a2c30";
 const HARNESS = "#121417";
@@ -156,11 +166,13 @@ export type Body = {
   dispose: () => void;
 };
 
-export function createBody(): Body {
+export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}): Body {
+  const third = opts.thirdPerson ?? false;
+  const look = opts.look ?? PLAYER_LOOK;
   const group = new THREE.Group();
   group.matrixAutoUpdate = false;
-  const suit = new THREE.MeshStandardMaterial({ color: SUIT, roughness: 0.85 });
-  const suitDark = new THREE.MeshStandardMaterial({ color: SUIT_DARK, roughness: 0.85 });
+  const suit = new THREE.MeshStandardMaterial({ color: look.suit, roughness: 0.85 });
+  const suitDark = new THREE.MeshStandardMaterial({ color: look.suitDark, roughness: 0.85 });
   const glove = new THREE.MeshStandardMaterial({ color: GLOVE, roughness: 0.6 });
   const shoe = new THREE.MeshStandardMaterial({ color: SHOE, roughness: 0.7 });
   const harness = new THREE.MeshStandardMaterial({ color: HARNESS, roughness: 0.7 });
@@ -246,6 +258,34 @@ export function createBody(): Body {
     return m;
   });
 
+  // Third person only: helmet, visor, neck and the container on the back.
+  const helmetMat = new THREE.MeshStandardMaterial({ color: look.helmet, roughness: 0.35 });
+  const visorMat = new THREE.MeshStandardMaterial({
+    color: "#0b0d10",
+    roughness: 0.15,
+    metalness: 0.4,
+  });
+  const rigMat = new THREE.MeshStandardMaterial({ color: "#2b3138", roughness: 0.8 });
+  const trayMat = new THREE.MeshStandardMaterial({ color: "#1c2026", roughness: 0.8 });
+  const helmet = joint(helmetMat, 0.125);
+  helmet.scale.set(0.12, 0.125, 0.135);
+  helmet.position.set(0, 0.035, 0.07);
+  const visor = joint(visorMat, 0.1);
+  visor.scale.set(0.1, 0.042, 0.06);
+  visor.position.set(0, 0.0, -0.025);
+  const neck = limb(suitDark, 0.05);
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  geos.push(boxGeo);
+  const container = new THREE.Mesh(boxGeo, rigMat);
+  container.scale.set(0.34, 0.44, 0.13);
+  const tray = new THREE.Mesh(boxGeo, trayMat);
+  tray.scale.set(0.34, 0.14, 0.14);
+  for (const m of [container, tray]) {
+    m.frustumCulled = false;
+    group.add(m);
+  }
+  for (const m of [helmet, visor, neck, container, tray]) m.visible = third;
+
   const dialTex = dial();
   const face = new THREE.Mesh(new THREE.CircleGeometry(0.036, 28), new THREE.MeshBasicMaterial({ map: dialTex ?? undefined }));
   const needle = new THREE.Mesh(
@@ -256,6 +296,7 @@ export function createBody(): Body {
   face.add(needle);
   face.frustumCulled = false;
   needle.frustumCulled = false;
+  face.visible = !third;
   group.add(face);
   geos.push(face.geometry, needle.geometry);
 
@@ -295,6 +336,17 @@ export function createBody(): Body {
   const wristTip = new THREE.Vector3();
   const pole = new THREE.Vector3();
   const fingerFwd = new THREE.Vector3(0, 0.2, -1).normalize();
+  const xAxis = new THREE.Vector3(1, 0, 0);
+  const minusZ = new THREE.Vector3(0, 0, -1);
+  const trunkQ = new THREE.Quaternion();
+  const partQ = new THREE.Quaternion();
+  const knee = new THREE.Vector3();
+  const hip = new THREE.Vector3();
+  // The trunk pivots at the neck; lying belly-to-earth tips it back 78 degrees.
+  const NECK_Y = -0.16;
+  const NECK_Z = 0.07;
+  const tp = (out: THREE.Vector3, x: number, y: number, z: number) =>
+    out.set(x, y - NECK_Y, z - NECK_Z).applyQuaternion(trunkQ).add(_d.set(0, NECK_Y, NECK_Z));
 
   return {
     group,
@@ -304,18 +356,29 @@ export function createBody(): Body {
       group.matrix.copy(frame);
       group.matrixWorldNeedsUpdate = true;
       const upright = pose.mode !== "freefall";
+      const lean = third ? (pose.lean ?? (upright ? 0 : 1)) : 0;
+      const trackAmt = pose.trackAmt ?? 0;
+      trunkQ.setFromAxisAngle(xAxis, -1.37 * lean);
       const k = 1 - Math.exp(-(pose.gesture ? 22 : 11) * dt);
       const g = pose.gesture ? GESTURES[pose.gesture] : null;
 
       for (const arm of arms) {
         const s = arm.side;
-        if (upright) arm.shoulder.set(s * 0.19, -0.24, 0.07);
+        if (third) tp(arm.shoulder, s * 0.19, -0.24, 0.07);
+        else if (upright) arm.shoulder.set(s * 0.19, -0.24, 0.07);
         else arm.shoulder.set(s * 0.2, -0.24, 0.12);
         const override = s < 0 ? pose.leftHand : pose.rightHand;
         if (g && pose.gestureT < g.dur) {
           track(tmp, s < 0 ? g.left : g.right, pose.gestureT);
         } else if (override) {
           tmp.copy(override);
+        } else if (pose.mode === "freefall" && third) {
+          // Seen from outside: a relaxed box with bent elbows, or arms back to track.
+          if (pose.reaching) tmp.set(s * 0.3, 0.2, -0.04);
+          else tmp.set(s * 0.45, -0.02, -0.06).lerp(_a.set(s * 0.3, -0.3, 0.62), trackAmt);
+          const flap = Math.min(pose.air / 55, 1) * 0.015;
+          tmp.x += Math.sin(pose.time * 29 + s) * flap;
+          tmp.y += Math.cos(pose.time * 23 + s * 2) * flap;
         } else if (pose.mode === "freefall") {
           if (pose.reaching) tmp.set(s * 0.3, 0.2, -0.04);
           else if (pose.forward > 0.4) tmp.set(s * 0.43, -0.04, -0.33);
@@ -336,6 +399,7 @@ export function createBody(): Body {
         }
         arm.target.lerp(tmp, k);
         if (upright) pole.set(arm.shoulder.x + s * 0.7, arm.shoulder.y - 0.4, arm.shoulder.z + 0.4);
+        else if (third) pole.set(arm.shoulder.x + s, arm.shoulder.y - 0.15, arm.shoulder.z + 0.1);
         else pole.set(arm.shoulder.x + s * 1.0, arm.shoulder.y + 0.1, arm.shoulder.z + 0.1);
         solve(arm.elbowPos, arm.shoulder, arm.target, pole, UPPER, FORE);
         // Wrist sits exactly a forearm's length from the elbow, toward the target.
@@ -350,9 +414,9 @@ export function createBody(): Body {
         // In freefall the wrists bend so the palms face the wind, fingers forward.
         if (!upright && !g) _d.lerp(fingerFwd, 0.55).normalize();
         arm.hand.position.copy(wristTip);
-        arm.hand.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), _d);
+        arm.hand.quaternion.setFromUnitVectors(minusZ, _d);
         arm.hand.rotateZ(-s * 0.5);
-        if (s < 0) {
+        if (s < 0 && !third) {
           // Wrist altimeter on the left forearm, turned toward the eyes.
           face.position.copy(arm.elbowPos).lerp(wristTip, 0.78);
           _a.copy(face.position).multiplyScalar(-1).normalize();
@@ -362,7 +426,7 @@ export function createBody(): Body {
         }
       }
 
-      const showLegs = upright;
+      const showLegs = upright || third;
       torso.visible = showLegs;
       hips.visible = showLegs;
       chest.visible = showLegs;
@@ -378,53 +442,79 @@ export function createBody(): Body {
       if (!showLegs) return;
 
       // Placed waist-to-shoulders so the wide end of the trunk is at the chest.
-      _a.set(0, -0.22, 0.07);
-      _b.set(0, -0.74, 0.07);
+      tp(_a, 0, -0.22, 0.07);
+      tp(_b, 0, -0.74, 0.07);
       place(torso, _b, _a);
-      chest.position.set(0, -0.22, 0.07);
+      tp(chest.position, 0, -0.22, 0.07);
+      chest.quaternion.copy(trunkQ);
       chest.scale.set(0.17, 0.06, 0.11);
-      hips.position.set(0, -0.76, 0.07);
+      tp(hips.position, 0, -0.76, 0.07);
+      hips.quaternion.copy(trunkQ);
       hips.scale.set(0.155, 0.1, 0.11);
-      chestStrap.position.set(0, -0.38, -0.045);
+      tp(chestStrap.position, 0, -0.38, -0.045);
+      chestStrap.quaternion.copy(trunkQ);
+      if (third) {
+        tp(_a, 0, -0.2, 0.07);
+        place(neck, _c.set(0, -0.08, 0.08), _a);
+        tp(container.position, 0, -0.5, 0.245);
+        container.quaternion.copy(trunkQ);
+        tp(tray.position, 0, -0.24, 0.245);
+        tray.quaternion.copy(trunkQ);
+      }
       for (let i = 0; i < 2; i++) {
         const s = i === 0 ? -1 : 1;
-        _a.set(s * 0.1, -0.24, -0.04);
-        _b.set(s * 0.12, -0.8, -0.04);
+        tp(_a, s * 0.1, -0.24, -0.04);
+        tp(_b, s * 0.12, -0.8, -0.04);
         place(webs[i]!, _a, _b);
         const strap = legStraps[i]!;
-        strap.position.set(s * 0.1, -0.86, 0.06);
-        strap.rotation.set(Math.PI / 2, 0, 0);
+        tp(strap.position, s * 0.1, -0.86, 0.06);
+        strap.quaternion.copy(trunkQ).multiply(partQ.setFromAxisAngle(xAxis, Math.PI / 2));
       }
       const hanging = pose.mode === "canopy";
+      const prone = third && pose.mode === "freefall";
       for (const leg of legs) {
         const s = leg.side;
-        const hip = _c.set(s * 0.09, -0.78, 0.07);
-        if (pose.mode === "cabin") {
+        tp(hip, s * 0.09, -0.78, 0.07);
+        if (prone) {
+          // Belly-to-earth: knees down, shins up behind. Tracking straightens the legs.
+          tmp.set(s * 0.2, -1.38, 0.32).lerp(_a.set(s * 0.13, -1.62, 0.12), trackAmt);
+          tp(tmp, tmp.x, tmp.y, tmp.z);
+        } else if (pose.mode === "cabin") {
           // The Twin Otter cabin is too low to stand straight; knees stay bent.
           const stride = Math.sin(pose.walk + (s > 0 ? Math.PI : 0)) * 0.12;
           tmp.set(s * 0.12, -1.42, 0.02 + stride);
         } else if (hanging) {
           const sway = Math.sin(pose.time * 1.3 + s) * 0.03;
           tmp.set(s * 0.11, -1.6, 0.1 + sway);
-          tmp.lerp(_d.set(s * 0.08, -1.5, -0.32), pose.flare);
+          tmp.lerp(_a.set(s * 0.08, -1.5, -0.32), pose.flare);
+          tp(tmp, tmp.x, tmp.y, tmp.z);
         } else {
           tmp.set(s * 0.13, -1.52, 0.05);
         }
         leg.footPos.lerp(tmp, 1 - Math.exp(-9 * dt));
-        pole.set(hip.x + s * 0.1, hip.y - 0.2, hip.z - 0.8);
-        const knee = new THREE.Vector3();
+        if (prone) tp(pole, s * 0.24, -1.1, -0.9);
+        else pole.set(hip.x + s * 0.1, hip.y - 0.2, hip.z - 0.8);
         solve(knee, hip, leg.footPos, pole, THIGH, SHIN);
         const ankle = _a.subVectors(leg.footPos, knee).setLength(SHIN).add(knee);
         place(leg.thigh, hip, knee);
         place(leg.shin, knee, ankle);
         leg.knee.position.copy(knee);
-        leg.foot.position.copy(ankle).add(_b.set(0, -0.03, -0.08));
-        leg.foot.rotation.set(hanging ? 0.35 - pose.flare * 0.45 : 0, 0, 0);
+        if (prone) {
+          // Pointed toes, along the shin.
+          _b.subVectors(ankle, knee).normalize();
+          leg.foot.quaternion.setFromUnitVectors(minusZ, _b);
+          leg.foot.position.copy(ankle).addScaledVector(_b, 0.07);
+        } else {
+          leg.foot.position.copy(ankle).add(_b.set(0, -0.03, -0.08));
+          leg.foot.rotation.set(hanging ? 0.35 - pose.flare * 0.45 : 0, 0, 0);
+        }
       }
     },
     dispose() {
       geos.forEach((g) => g.dispose());
-      [suit, suitDark, glove, shoe, harness].forEach((m) => m.dispose());
+      [suit, suitDark, glove, shoe, harness, helmetMat, visorMat, rigMat, trayMat].forEach((m) =>
+        m.dispose(),
+      );
       dialTex?.dispose();
       (face.material as THREE.Material).dispose();
       (needle.material as THREE.Material).dispose();

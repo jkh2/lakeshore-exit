@@ -16,9 +16,12 @@ import {
 } from "./constants";
 import { loadSave, writeSave } from "./save";
 import type { Bridge, Hud, Outcome, Phase } from "./types";
-import { createBody, type BodyMode, type Gesture } from "./body";
+import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
-import { SUN_DIR, cityTexture, cloudTexture, createAtmosphere, createWaterMaterial } from "./world";
+import { BASE_FALL, BREAKOFF_FT, createFormation } from "./formation";
+import { createCloudField } from "./clouds";
+import { createStreaks } from "./streaks";
+import { SUN_DIR, cityTexture, createAtmosphere, createWaterMaterial } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
 
@@ -27,6 +30,7 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler(0, 0, 0, "YXZ");
+const _base = new THREE.Vector3();
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -35,6 +39,11 @@ function clamp(n: number, a: number, b: number) {
 function smooth(u: number) {
   const t = clamp(u, 0, 1);
   return t * t * (3 - 2 * t);
+}
+
+/** Moves angle `from` a fraction `k` of the short way round toward `to`. */
+function easeAngle(from: number, to: number, k: number) {
+  return from + Math.atan2(Math.sin(to - from), Math.cos(to - from)) * k;
 }
 
 function yawOf(x: number, z: number) {
@@ -656,26 +665,6 @@ export function mountGame(
     boats.push(b);
   }
 
-  const cTex = cloudTexture(21);
-  const clouds: THREE.Sprite[] = [];
-  if (cTex) {
-    const cMat = new THREE.SpriteMaterial({ map: cTex, transparent: true, depthWrite: false, fog: false });
-    const cloudRnd = mulberry(21);
-    for (let i = 0; i < 16; i++) {
-      const puff = new THREE.Sprite(cMat);
-      const w = 480 + cloudRnd() * 1200;
-      puff.scale.set(w, w * (0.32 + cloudRnd() * 0.18), 1);
-      const high = i < 6;
-      puff.position.set(
-        -900 + cloudRnd() * 2600,
-        high ? 4300 + cloudRnd() * 900 : 700 + cloudRnd() * 1700,
-        -1800 + cloudRnd() * 3600,
-      );
-      scene.add(puff);
-      clouds.push(puff);
-    }
-  }
-
   const plane = new THREE.Group();
   scene.add(plane);
   const paint = new THREE.MeshStandardMaterial({ color: "#f3f6f8", roughness: 0.42, metalness: 0.22 });
@@ -810,8 +799,12 @@ export function mountGame(
   const canopy = canopyRig.group;
   const body = createBody();
   scene.add(body.group);
-  // Standing eye height; under canopy the harness hangs this far above the feet.
-  const EYE_UP = 1.6;
+  const formation = createFormation(scene);
+  // Phones get fewer, bigger puffs: the same clouds for less overdraw.
+  const cloudField = createCloudField(scene, coarse ? 0.6 : 1);
+  const streaks = createStreaks(scene);
+  let cloudDensity = 0;
+  let cloudLogged = false;
   canopy.visible = false;
   scene.add(canopy);
   const streamer = new THREE.Group();
@@ -857,6 +850,14 @@ export function mountGame(
   let openT = 0;
   let shock = 0;
   let gesture: Gesture | null = null;
+  let docked = false;
+  /** Keys held while docking don't count until released, so diving in doesn't drop the grip. */
+  let gripSettled = false;
+  /** After letting go, no assist or re-dock for a moment so the player can actually leave. */
+  let dockAgainAt = 0;
+  let dockedOnce = false;
+  let brokeOff = false;
+  let exitTime = 0;
   let gestureStart = 0;
   let brakeL = 0;
   let brakeR = 0;
@@ -905,6 +906,10 @@ export function mountGame(
     doorU: 0.5,
     doorV: 0.5,
     doorVisible: false,
+    baseU: 0.5,
+    baseV: 0.5,
+    baseVisible: false,
+    baseLabel: "",
     dzRel: 0,
     dzDist: 0,
     dzVisible: false,
@@ -940,8 +945,10 @@ export function mountGame(
     warnedDecision = false;
     beepAcc = 0;
     flashText = "";
+    cloudLogged = false;
     canopy.visible = false;
     streamer.visible = false;
+    resetFormation();
     riderX = -0.05;
     riderZ = 1.05;
     localYaw = -Math.PI / 2;
@@ -958,11 +965,20 @@ export function mountGame(
     persist();
   }
 
+  function resetFormation() {
+    formation.reset();
+    docked = false;
+    dockedOnce = false;
+    brokeOff = false;
+    dockAgainAt = 0;
+  }
+
   function backToMenu() {
     phase = "menu";
     outcome = null;
     canopy.visible = false;
     streamer.visible = false;
+    resetFormation();
     flying = "none";
     if (document.pointerLockElement) void document.exitPointerLock();
   }
@@ -1060,7 +1076,91 @@ export function mountGame(
     );
     phase = "freefall";
     flying = "none";
+    _v2.set(1, 0, 0).applyQuaternion(plane.quaternion);
+    startFormation(_v2);
     persist();
+  }
+
+  function startFormation(out: THREE.Vector3) {
+    resetFormation();
+    exitTime = simTime;
+    formation.exit(pos, vel, out, bodyYaw);
+  }
+
+  // Flying at the open slot from close in: the target velocity eases into a controlled closing
+  // speed relative to the base, the way a real approach slows down for the last few meters.
+  // It is relative to the air the base settles into (wind, BASE_FALL), not the base's current
+  // velocity, so both shed the plane's speed together after exit.
+  function approach(target: THREE.Vector3, dt: number, turnInput: number) {
+    if (docked || !formation.active() || simTime < dockAgainAt) return;
+    formation.slot(_base);
+    const dx = pos.x - _base.x;
+    const dz = pos.z - _base.z;
+    const dy = pos.y + 0.32 - _base.y;
+    const d = Math.hypot(dx, dz);
+    if (d > 14 || d < 0.01) return;
+    if (d > 4 && Math.cos(Math.atan2(dx, dz) - bodyYaw) < 0.2) return;
+    const w = smooth((14 - d) / 8);
+    const close = Math.min(d * 0.9, 6);
+    target.x += (WIND_X - (dx / d) * close - target.x) * w;
+    target.z += (WIND_Z - (dz / d) * close - target.z) * w;
+    if (d < 8) target.y += (-BASE_FALL - clamp(dy, -3, 3) * 1.2 - target.y) * w * 0.6;
+    if (d < 3 && Math.abs(turnInput) < 0.1) {
+      bodyYaw = easeAngle(bodyYaw, formation.slotYaw(), 1 - Math.exp(-1.5 * dt));
+    }
+  }
+
+  // Docking on the base: get into the open slot, roughly level and facing in, and the
+  // other two take your grips. Any strong input lets go.
+  function dock(dt: number, input: ReturnType<typeof sample>) {
+    if (!formation.active()) {
+      if (docked) {
+        docked = false;
+        formation.setPlayerDocked(false);
+      }
+      return;
+    }
+    formation.slot(_v1);
+    const yawIn = formation.slotYaw();
+    if (docked) {
+      const still = Math.abs(input.forward) < 0.3 && Math.abs(input.turn) < 0.3;
+      if (!gripSettled) gripSettled = still;
+      else if (Math.abs(input.forward) > 0.6 || Math.abs(input.turn) > 0.6) {
+        docked = false;
+        formation.setPlayerDocked(false);
+        flashText = "LOST THE GRIP";
+        flashUntil = simTime + 1.4;
+        dockAgainAt = simTime + 2;
+        pushLog("Lost the grip");
+        return;
+      }
+      // Aim short of the slot by this step's fall, which step() adds right after.
+      _v1.y -= 0.32;
+      pos.lerp(_v1.addScaledVector(formation.baseVel, -dt), 1 - Math.exp(-6 * dt));
+      vel.copy(formation.baseVel);
+      bodyYaw = easeAngle(bodyYaw, yawIn, 1 - Math.exp(-4 * dt));
+      return;
+    }
+    if (simTime < dockAgainAt || !formation.ready()) return;
+    const dx = pos.x - _v1.x;
+    const dz = pos.z - _v1.z;
+    const dy = pos.y + 0.32 - _v1.y;
+    const facingIn = Math.cos(yawIn - bodyYaw) > 0.45;
+    const closing = Math.abs(vel.y - formation.baseVel.y) < 8;
+    if (Math.hypot(dx, dz) < 1.9 && Math.abs(dy) < 1.7 && closing && facingIn) {
+      docked = true;
+      gripSettled = false;
+      formation.setPlayerDocked(true);
+      flashText = "DOCKED";
+      flashUntil = simTime + 1.8;
+      audio.beep(880, 0.1, 0.06);
+      audio.beep(1175, 0.14, 0.06);
+      if (!dockedOnce) {
+        dockedOnce = true;
+        const ft = Math.round(pos.y * FT_PER_M).toLocaleString("en-US");
+        pushLog(`Docked at ${ft} ft · ${(simTime - exitTime).toFixed(1)} s after exit`);
+      }
+    }
   }
 
   function pullMain() {
@@ -1077,6 +1177,19 @@ export function mountGame(
     pushLog(`Pull at ${Math.round(alt).toLocaleString("en-US")} ft`);
     audio.fabric();
     if (alt < 700) pushLog("That pull is late");
+    if (docked) {
+      docked = false;
+      formation.setPlayerDocked(false);
+    }
+    if (formation.started()) {
+      const near = formation.nearest(pos);
+      if (near < 25) {
+        pushLog(`Opened ${Math.round(near)} m from another jumper`);
+        flashText = "TOO CLOSE — TRACK AWAY BEFORE YOU PULL";
+        flashUntil = simTime + 2.4;
+      } else if (Number.isFinite(near)) pushLog(`Clear air at pull · ${Math.round(near)} m`);
+      else pushLog("Clear air at pull");
+    }
   }
 
   function cutaway() {
@@ -1162,6 +1275,21 @@ export function mountGame(
       bodyYaw = -Math.PI / 2;
       bodyPitch = -0.35;
       audio.resetDeath();
+    } else if (p === "formation") {
+      phase = "freefall";
+      flying = "none";
+      mal = "none";
+      reserveArmed = false;
+      warnedDecision = false;
+      canopy.visible = false;
+      streamer.visible = false;
+      pos.set(RUN_X, 3600, 0);
+      vel.set(WIND_X, -40, 0.4);
+      bodyPitch = -0.3;
+      bodyYaw = 0;
+      startFormation(_v2.set(0, 0, 1));
+      formation.center(_v1);
+      bodyYaw = Math.atan2(-(_v1.x - pos.x), -(_v1.z - pos.z));
     } else if (p === "cabin") begin();
   }
 
@@ -1247,10 +1375,6 @@ export function mountGame(
       boat.position.z += dt * (6 + i);
       if (boat.position.z > 1800) boat.position.z = -1800;
     }
-    for (const puff of clouds) {
-      puff.position.x += dt * 2.2;
-      if (puff.position.x > 2000) puff.position.x = -1600;
-    }
     ferris.position.y = 30 + Math.sin(simTime * 0.6) * 0;
 
     if (!input) return;
@@ -1299,6 +1423,7 @@ export function mountGame(
       return;
     }
 
+    formation.update(dt, simTime);
     if (phase === "down" || phase === "impact") return;
 
     const arch = input.forward > 0.4;
@@ -1328,6 +1453,7 @@ export function mountGame(
       const fx = -Math.sin(bodyYaw);
       const fz = -Math.cos(bodyYaw);
       _v1.set(fx * h + WIND_X, -terminal, fz * h + WIND_Z);
+      if (phase === "freefall") approach(_v1, dt, input.turn);
       vel.lerp(_v1, 1 - Math.exp(-1.8 * dt));
     } else if (phase === "malfunction" && mal === "twist") {
       bodyYaw += dt * 4.2;
@@ -1386,6 +1512,23 @@ export function mountGame(
       const fz = -Math.cos(heading);
       _v1.set(fx * fspd + WIND_X, -desc, fz * fspd + WIND_Z);
       vel.lerp(_v1, 1 - Math.exp(-2.5 * dt));
+    }
+
+    if (phase === "freefall") dock(dt, input);
+    else if (docked) {
+      docked = false;
+      formation.setPlayerDocked(false);
+    }
+    if (formation.broken() && !brokeOff) {
+      brokeOff = true;
+      docked = false;
+      if (phase === "freefall") {
+        pushLog(`Break-off at ${BREAKOFF_FT.toLocaleString("en-US")} ft`);
+        flashText = "BREAK OFF — TRACK AWAY";
+        flashUntil = simTime + 3;
+        audio.beep(660, 0.12, 0.05);
+        audio.beep(660, 0.12, 0.05);
+      }
     }
 
     shock *= Math.exp(-3.4 * dt);
@@ -1512,7 +1655,20 @@ export function mountGame(
           : "RED LIGHT — SPACE STILL JUMPS"
         : "WALK TO THE DOOR";
     } else if (phase === "freefall") {
-      prompt = reserveArmed ? "PULL RESERVE — R OR SPACE" : "SPACE PULLS";
+      if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
+      else if (docked) prompt = "DOCKED · HOLD ON UNTIL BREAK-OFF";
+      else if (formation.active()) {
+        formation.slot(_base);
+        const d = Math.hypot(_base.x - pos.x, _base.z - pos.z);
+        const dy = _base.y - (pos.y + 0.32);
+        if (d > 4) prompt = `FLY TO THE OPEN SLOT · ${Math.round(d)} m`;
+        else if (dy > 1.4) prompt = "SLOT IS ABOVE — ARCH TO RISE";
+        else if (dy < -1.4) prompt = "SLOT IS BELOW — DIVE TO DROP DOWN";
+        else if (!formation.ready()) prompt = "HOLD THERE — THE BASE IS BUILDING";
+        else prompt = "FACE IN TO DOCK";
+      } else if (brokeOff && formation.nearest(pos) < 30) {
+        prompt = "TRACK AWAY — HOLD S, THEN PULL";
+      } else prompt = "SPACE PULLS";
     } else if (phase === "malfunction") {
       prompt = "X CUT AWAY · THEN R RESERVE";
     } else if (phase === "deploying") {
@@ -1570,6 +1726,27 @@ export function mountGame(
     hud.doorVisible = phase === "cabin" && !inDoor;
     hud.doorU = facing ? clamp(projected.x * 0.5 + 0.5, 0.06, 0.94) : projected.x < 0 ? 0.06 : 0.94;
     hud.doorV = facing ? clamp(-projected.y * 0.5 + 0.5, 0.12, 0.82) : 0.2;
+    hud.baseVisible = false;
+    if (phase === "freefall" && formation.active() && !docked) {
+      formation.center(_base);
+      const dist = _base.distanceTo(camera.position);
+      if (dist > 2.6) {
+        const ahead = _v2.dot(_v1.copy(_base).sub(camera.position)) > 0;
+        _base.project(camera);
+        if (!ahead) _base.multiplyScalar(-1);
+        hud.baseVisible = true;
+        const edge = !ahead || Math.abs(_base.x) > 1 || Math.abs(_base.y) > 1;
+        if (edge) {
+          // Off screen or behind: pin it to the edge on the side to turn toward.
+          const k = 1 / Math.max(Math.abs(_base.x), Math.abs(_base.y), 1e-3);
+          _base.x *= k;
+          _base.y *= k;
+        }
+        hud.baseU = clamp(_base.x * 0.5 + 0.5, 0.06, 0.94);
+        hud.baseV = clamp(-_base.y * 0.5 + 0.5, 0.1, 0.86);
+        hud.baseLabel = `BASE ${Math.round(dist)} m`;
+      }
+    }
     hud.dzVisible = phase === "freefall" || phase === "canopy" || phase === "deploying" || phase === "malfunction";
     hud.dzRel = THREE.MathUtils.radToDeg(rel);
     hud.dzDist = Math.hypot(dx, dz);
@@ -1727,8 +1904,36 @@ export function mountGame(
     } else {
       p.mode = "freefall";
       bodyFrame.compose(camera.position, camera.quaternion, one);
+      if (docked && phase === "freefall" && !p.gesture) {
+        // Hold the neighbors' hands either side of the slot.
+        bodyInv.copy(bodyFrame).invert();
+        formation.playerGrips(handL, handR);
+        p.leftHand = handL.applyMatrix4(bodyInv);
+        p.rightHand = handR.applyMatrix4(bodyInv);
+      }
     }
     body.update(bodyFrame, p, dt);
+  }
+
+  const airVel = new THREE.Vector3();
+
+  // Clouds and the air rushing past: how deep in cloud the eye is, the whiteout veil, and
+  // streaks that scale with airspeed (and thicken inside a cloud).
+  function airFx() {
+    cloudDensity = cloudField.update(camera, fog.near, fog.far);
+    const falling = phase === "freefall" || phase === "deploying" || phase === "malfunction";
+    const aloft = falling || phase === "canopy";
+    if (aloft && cloudDensity > 0.6 && !cloudLogged) {
+      cloudLogged = true;
+      pushLog(
+        `Through a cloud at ${Math.round(pos.y * FT_PER_M).toLocaleString("en-US")} ft · real jumps keep clear of clouds`,
+      );
+    }
+    airVel.set(vel.x - WIND_X, vel.y, vel.z - WIND_Z);
+    let amount = 0;
+    if (falling) amount = clamp(airVel.length() / 60, 0, 1) * 0.55 + cloudDensity * 0.45;
+    else if (phase === "canopy") amount = 0.12 + cloudDensity * 0.6;
+    streaks.update(camera.position, airVel, reduce ? 0 : amount);
   }
 
   function audioMix() {
@@ -1769,7 +1974,9 @@ export function mountGame(
       guard++;
     }
     frameCamera(frameDt);
+    airFx();
     poseBody(frameDt);
+    formation.draw(frameDt, simTime);
     audioMix();
     publish(lastInput?.forward ?? 0);
     renderer.render(scene, camera);
@@ -1871,6 +2078,7 @@ export function mountGame(
     getWarning: () => hud.banner,
     inDoor: () => inDoor,
     getLocalX: () => riderX,
+    isDocked: () => docked,
     addLook: (dx: number, dy: number) => {
       lookDX += dx;
       lookDY += dy;
@@ -1895,7 +2103,10 @@ export function mountGame(
     audio.dispose();
     atmo.dispose();
     canopyRig.dispose();
+    cloudField.dispose();
+    streaks.dispose();
     body.dispose();
+    formation.dispose();
     normalTex.dispose();
     if (window.__controlsTest === controlsTest) delete window.__controlsTest;
     const geos = new Set<THREE.BufferGeometry>();
@@ -1977,6 +2188,7 @@ declare global {
       getWarning?: () => string;
       inDoor?: () => boolean;
       getLocalX?: () => number;
+      isDocked?: () => boolean;
       addLook?: (dx: number, dy: number) => void;
     };
   }

@@ -45,7 +45,25 @@
 }
 
 .visor {
-  background: radial-gradient(ellipse at center, transparent 58%, rgba(8, 12, 16, 0.55) 100%);
+  /* Eased stops, so the vignette's inner edge doesn't show as a ring against bright haze. */
+  background: radial-gradient(
+    ellipse at center,
+    transparent 48%,
+    rgba(8, 12, 16, 0.06) 62%,
+    rgba(8, 12, 16, 0.2) 78%,
+    rgba(8, 12, 16, 0.55) 100%
+  );
+}
+
+.hud-ink {
+  /* Keeps white readouts legible inside a cloud or against bright haze. */
+  text-shadow:
+    0 1px 2px rgba(8, 12, 16, 0.55),
+    0 0 10px rgba(8, 12, 16, 0.35);
+}
+
+.hud-ink [role="alert"] {
+  text-shadow: none;
 }
 
 .warning-live {

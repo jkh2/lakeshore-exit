@@ -61,6 +61,11 @@ export type Hud = {
   doorU: number;
   doorV: number;
   doorVisible: boolean;
+  /** Screen position of the base during formation freefall, 0..1 like the door marker. */
+  baseU: number;
+  baseV: number;
+  baseVisible: boolean;
+  baseLabel: string;
   dzRel: number;
   dzDist: number;
   dzVisible: boolean;
