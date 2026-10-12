@@ -16,6 +16,7 @@ import {
 } from "./constants";
 import { loadSave, writeSave } from "./save";
 import type { Bridge, Hud, Outcome, Phase } from "./types";
+import { SUN_DIR, cityTexture, cloudTexture, createAtmosphere, createWaterMaterial } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
 
@@ -200,32 +201,6 @@ function facadeBox(
   return mesh;
 }
 
-function cloudTex() {
-  const c = document.createElement("canvas");
-  c.width = 256;
-  c.height = 256;
-  const g = c.getContext("2d");
-  if (!g) return null;
-  const puffs: Array<[number, number, number]> = [
-    [100, 140, 78],
-    [150, 118, 88],
-    [128, 150, 70],
-    [176, 146, 54],
-    [78, 150, 48],
-  ];
-  for (const [x, y, r] of puffs) {
-    const grd = g.createRadialGradient(x, y, 4, x, y, r);
-    grd.addColorStop(0, "rgba(255,255,255,0.72)");
-    grd.addColorStop(0.45, "rgba(255,255,255,0.28)");
-    grd.addColorStop(1, "rgba(255,255,255,0)");
-    g.fillStyle = grd;
-    g.fillRect(0, 0, 256, 256);
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 function strut(
   parent: THREE.Object3D,
   ax: number,
@@ -355,10 +330,13 @@ export function mountGame(
   renderer.toneMappingExposure = 1.08;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#9eb6cc");
-  const fog = new THREE.Fog(new THREE.Color("#d5e4f2"), 300, 9000);
+  const atmo = createAtmosphere(renderer);
+  scene.background = atmo.fog.clone();
+  scene.environment = atmo.envMap;
+  scene.environmentIntensity = 0.85;
+  const fog = new THREE.Fog(atmo.fog.clone(), 400, 14000);
   scene.fog = fog;
-  const camera = new THREE.PerspectiveCamera(72, 1, 0.12, 22000);
+  const camera = new THREE.PerspectiveCamera(72, 1, 0.12, 45000);
   camera.rotation.order = "YXZ";
 
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -366,125 +344,87 @@ export function mountGame(
   const audio = createAudio();
   const save = loadSave();
 
-  scene.add(new THREE.HemisphereLight("#d5e6f5", "#6d7a58", 0.95));
-  scene.add(new THREE.AmbientLight("#ffffff", 0.28));
-  const sun = new THREE.DirectionalLight("#ffe0c2", 2.35);
-  sun.position.set(-700, 900, 280);
+  scene.add(new THREE.HemisphereLight("#cfe0f0", "#5d6650", 0.35));
+  const sun = new THREE.DirectionalLight("#fff1dc", 2.6);
+  sun.position.copy(SUN_DIR).multiplyScalar(1000);
   scene.add(sun);
 
-  const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(12000, 28, 16),
-    new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      fog: false,
-      uniforms: {
-        uTop: { value: new THREE.Color("#2a6eb8") },
-        uHor: { value: new THREE.Color("#f7e4d2") },
-        uBot: { value: new THREE.Color("#8eb8d4") },
-        uSun: { value: new THREE.Vector3(-0.62, 0.58, 0.24).normalize() },
-      },
-      vertexShader: `varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `varying vec3 vDir; uniform vec3 uTop; uniform vec3 uHor; uniform vec3 uBot; uniform vec3 uSun;
-        void main(){
-          vec3 d = normalize(vDir);
-          float h = d.y;
-          vec3 col = mix(uHor, uTop, smoothstep(0.0, 0.55, h));
-          col = mix(uBot, col, smoothstep(-0.28, 0.06, h));
-          float sunDot = max(dot(d, uSun), 0.0);
-          col += vec3(1.0, 0.72, 0.42) * pow(sunDot, 7.0) * 0.18;
-          col += vec3(1.0, 0.96, 0.88) * pow(sunDot, 420.0);
-          float haze = exp(-abs(h) * 9.0);
-          col = mix(col, vec3(0.95, 0.9, 0.84), haze * 0.22);
-          gl_FragColor = vec4(col, 1.0);
-        }`,
-    }),
-  );
-  sky.frustumCulled = false;
+  const sky = atmo.sky;
   scene.add(sky);
 
-  const cityMap = tile("city");
+  const aniso = renderer.capabilities.getMaxAnisotropy();
+  const cityMap = cityTexture(5, coarse ? 1024 : 2048, 8, aniso);
+  const farMap = cityTexture(9, 1024, 8, aniso);
   const sandMap = tile("sand");
   const roadMap = tile("road");
-  if (cityMap) cityMap.repeat.set(46, 70);
-  if (sandMap) sandMap.repeat.set(18, 40);
-  if (roadMap) roadMap.repeat.set(1, 80);
+  if (cityMap) cityMap.repeat.set(2500 / 820, 6200 / 820);
+  if (farMap) farMap.repeat.set(1, 1);
 
-  const cityMat = new THREE.MeshStandardMaterial({ map: cityMap ?? undefined, color: "#66707a", roughness: 0.95 });
+  const cityMat = new THREE.MeshStandardMaterial({ map: cityMap ?? undefined, color: "#d9dcdf", roughness: 0.95 });
   const sandMat = new THREE.MeshStandardMaterial({ map: sandMap ?? undefined, color: "#e6d3aa", roughness: 1 });
   const grassMat = new THREE.MeshStandardMaterial({ color: "#3f7a4a", roughness: 1 });
   const roadMat = new THREE.MeshStandardMaterial({ map: roadMap ?? undefined, color: "#2c333a", roughness: 0.9 });
-  const waterUniforms = {
-    uTime: { value: 0 },
-    uSun: { value: new THREE.Vector3(-0.62, 0.58, 0.24).normalize() },
-    uCam: { value: new THREE.Vector3() },
+  const normalTex = new THREE.TextureLoader().load("/textures/waternormals.jpg");
+  normalTex.anisotropy = aniso;
+  const waterFx = createWaterMaterial(normalTex, atmo.haze, atmo.zenith, SHORE_X);
+  const waterUniforms = waterFx.uniforms;
+  // Decals on the ground draw over it without z-fighting, even kilometers away.
+  const onTop = (m: THREE.Material, k: number) => {
+    m.polygonOffset = true;
+    m.polygonOffsetFactor = -k;
+    m.polygonOffsetUnits = -k * 4;
+    return m;
   };
-  const water = new THREE.Mesh(
-    new THREE.PlaneGeometry(3400, 6200, 64, 64),
-    new THREE.ShaderMaterial({
-      uniforms: waterUniforms,
-      fog: false,
-      vertexShader: `uniform float uTime; varying vec3 vWorld; varying vec2 vUv;
-        void main(){
-          vUv = uv;
-          vec3 p = position;
-          p.z += sin(position.x * 0.007 + uTime * 0.55) * 2.4;
-          p.z += cos(position.y * 0.005 + uTime * 0.38) * 1.7;
-          p.z += sin((position.x + position.y) * 0.018 + uTime * 1.1) * 0.28;
-          vec4 wp = modelMatrix * vec4(p, 1.0);
-          vWorld = wp.xyz;
-          gl_Position = projectionMatrix * viewMatrix * wp;
-        }`,
-      fragmentShader: `varying vec3 vWorld; varying vec2 vUv; uniform float uTime; uniform vec3 uSun; uniform vec3 uCam;
-        void main(){
-          vec3 view = normalize(uCam - vWorld);
-          float depth = smoothstep(150.0, 1100.0, vWorld.x);
-          vec3 shallow = vec3(0.20, 0.58, 0.62);
-          vec3 deep = vec3(0.03, 0.16, 0.30);
-          vec3 col = mix(shallow, deep, depth);
-          float rip = 0.5 + 0.5 * sin(vWorld.x * 0.09 + uTime) * cos(vWorld.z * 0.07 - uTime * 0.8);
-          col = mix(col, vec3(0.12, 0.42, 0.52), rip * 0.18);
-          vec3 n = normalize(vec3(
-            cos(vWorld.x * 0.085 + uTime * 0.9) * 0.16,
-            1.0,
-            sin(vWorld.z * 0.07 - uTime * 0.7) * 0.16
-          ));
-          vec3 refl = reflect(-uSun, n);
-          float spec = pow(max(dot(refl, view), 0.0), 90.0);
-          float broad = pow(max(dot(refl, view), 0.0), 8.0);
-          col += vec3(1.0, 0.9, 0.7) * spec * 0.95;
-          col += vec3(0.55, 0.72, 0.78) * broad * 0.18;
-          float fres = pow(1.0 - max(view.y, 0.0), 2.6);
-          col = mix(col, vec3(0.78, 0.86, 0.9), fres * 0.42);
-          float shore = smoothstep(210.0, 148.0, vWorld.x);
-          float foam = shore * (0.45 + 0.55 * sin(vWorld.z * 0.42 + uTime * 1.6));
-          col = mix(col, vec3(0.92, 0.95, 0.94), foam * 0.72);
-          float dist = length(uCam - vWorld);
-          col = mix(col, vec3(0.82, 0.88, 0.93), smoothstep(600.0, 11000.0, dist));
-          gl_FragColor = vec4(col, 1.0);
-        }`,
-    }),
-  );
+  const WORLD = 120000;
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(WORLD, WORLD * 2), waterFx.material);
   water.rotation.x = -Math.PI / 2;
-  water.position.set(SHORE_X + 1600, 0.02, 0);
+  water.position.set(SHORE_X - 40 + WORLD / 2, 0, 0);
   water.frustumCulled = false;
   scene.add(water);
+
+  const farShape = new THREE.Shape();
+  farShape.moveTo(-WORLD, -WORLD);
+  farShape.lineTo(SHORE_X - 40, -WORLD);
+  farShape.lineTo(SHORE_X - 40, WORLD);
+  farShape.lineTo(-WORLD, WORLD);
+  farShape.closePath();
+  const farHole = new THREE.Path();
+  farHole.moveTo(-2508, -3100);
+  farHole.lineTo(-2508, 3100);
+  farHole.lineTo(SHORE_X - 40, 3100);
+  farHole.lineTo(SHORE_X - 40, -3100);
+  farHole.closePath();
+  farShape.holes.push(farHole);
+  const farGeo = new THREE.ShapeGeometry(farShape);
+  const farUv = farGeo.getAttribute("uv");
+  const farPos = farGeo.getAttribute("position");
+  for (let i = 0; i < farUv.count; i++) farUv.setXY(i, farPos.getX(i) / 1400, farPos.getY(i) / 1400);
+  const farLand = new THREE.Mesh(
+    farGeo,
+    new THREE.MeshStandardMaterial({ map: farMap ?? undefined, color: "#c9cdc8", roughness: 1 }),
+  );
+  farLand.rotation.x = -Math.PI / 2;
+  farLand.frustumCulled = false;
+  scene.add(farLand);
 
   const land = new THREE.Mesh(new THREE.PlaneGeometry(2500, 6200), cityMat);
   land.rotation.x = -Math.PI / 2;
   land.position.set(-1258, 0, 0);
   land.frustumCulled = false;
   scene.add(land);
-  const sand = new THREE.Mesh(new THREE.PlaneGeometry(SHORE_X, 6200), sandMat);
+  if (sandMap) sandMap.repeat.set(18, 40 * (WORLD / 3100));
+  const sand = new THREE.Mesh(new THREE.PlaneGeometry(SHORE_X, WORLD * 2), onTop(sandMat, 1));
   sand.rotation.x = -Math.PI / 2;
   sand.position.set(SHORE_X / 2, 0.05, 0);
   sand.frustumCulled = false;
   scene.add(sand);
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(22, 6200), roadMat);
+  if (roadMap) roadMap.repeat.set(1, 80 * (WORLD / 3100));
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(22, WORLD * 2), onTop(roadMat, 3));
+  road.frustumCulled = false;
   road.rotation.x = -Math.PI / 2;
   road.position.set(-18, 0.07, 0);
   scene.add(road);
-  const park = new THREE.Mesh(new THREE.PlaneGeometry(150, 380), grassMat);
+  const park = new THREE.Mesh(new THREE.PlaneGeometry(150, 380), onTop(grassMat, 1));
   park.rotation.x = -Math.PI / 2;
   park.position.set(-115, 0.08, -390);
   scene.add(park);
@@ -545,14 +485,14 @@ export function mountGame(
   if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
   scene.add(inst);
 
-  const verge = new THREE.Mesh(new THREE.PlaneGeometry(40, 6200), grassMat);
+  const verge = new THREE.Mesh(new THREE.PlaneGeometry(40, WORLD * 2), onTop(grassMat.clone(), 2));
   verge.rotation.x = -Math.PI / 2;
   verge.position.set(10, 0.09, 0);
   verge.frustumCulled = false;
   scene.add(verge);
   const wet = new THREE.Mesh(
-    new THREE.PlaneGeometry(18, 6200),
-    new THREE.MeshStandardMaterial({ color: "#b7a888", roughness: 0.95 }),
+    new THREE.PlaneGeometry(18, WORLD * 2),
+    onTop(new THREE.MeshStandardMaterial({ color: "#b7a888", roughness: 0.95 }), 2),
   );
   wet.rotation.x = -Math.PI / 2;
   wet.position.set(SHORE_X - 10, 0.07, 0);
@@ -664,7 +604,7 @@ export function mountGame(
   scene.add(field);
 
   const ringMat = (hex: string) =>
-    new THREE.MeshBasicMaterial({ color: hex, side: THREE.DoubleSide });
+    onTop(new THREE.MeshBasicMaterial({ color: hex, side: THREE.DoubleSide }), 4);
   const addRing = (inner: number, outer: number, hex: string) => {
     const m = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 48), ringMat(hex));
     m.rotation.x = -Math.PI / 2;
@@ -714,7 +654,7 @@ export function mountGame(
     boats.push(b);
   }
 
-  const cTex = cloudTex();
+  const cTex = cloudTexture(21);
   const clouds: THREE.Sprite[] = [];
   if (cTex) {
     const cMat = new THREE.SpriteMaterial({ map: cTex, transparent: true, depthWrite: false, fog: false });
@@ -908,6 +848,8 @@ export function mountGame(
   let malChance = 0.15;
   let lockedAlt = 12500 / FT_PER_M;
   let openT = 0;
+  let shock = 0;
+  let shockFired = false;
   let deployingReserve = false;
   let reserveArmed = false;
   let usedReserve = false;
@@ -1115,6 +1057,7 @@ export function mountGame(
     const alt = pos.y * FT_PER_M;
     phase = "deploying";
     openT = 0;
+    shockFired = false;
     deployingReserve = false;
     mal = Math.random() < malChance ? (Math.random() < 0.62 ? "streamer" : "twist") : "none";
     heading = bodyYaw;
@@ -1152,6 +1095,7 @@ export function mountGame(
     reserveArmed = false;
     usedReserve = true;
     openT = 0;
+    shockFired = false;
     heading = bodyYaw;
     pushLog(`Reserve at ${Math.round(alt).toLocaleString("en-US")} ft`);
     audio.fabric();
@@ -1381,6 +1325,11 @@ export function mountGame(
       openT += dt;
       const dur = deployingReserve ? 1.45 : 2.65;
       const u = smooth(openT / dur);
+      if (!shockFired && openT > dur * 0.42) {
+        // Slider comes down: the opening shock.
+        shockFired = true;
+        shock = deployingReserve ? 1 : 0.8;
+      }
       heading = bodyYaw;
       const fx = -Math.sin(heading);
       const fz = -Math.cos(heading);
@@ -1422,6 +1371,7 @@ export function mountGame(
       vel.lerp(_v1, 1 - Math.exp(-2.5 * dt));
     }
 
+    shock *= Math.exp(-3.4 * dt);
     const bankTarget = -input.turn * 0.5;
     bank += (bankTarget - bank) * (1 - Math.exp(-6 * dt));
     pos.addScaledVector(vel, dt);
@@ -1616,9 +1566,12 @@ export function mountGame(
     sky.position.copy(camera.position);
     const h = camera.position.y;
     const t = clamp(h / 4500, 0, 1);
-    fog.near = THREE.MathUtils.lerp(180, 2400, t);
-    fog.far = THREE.MathUtils.lerp(3200, 18000, t);
-    fog.color.set("#d5e4f2");
+    fog.near = THREE.MathUtils.lerp(500, 2600, t);
+    fog.far = THREE.MathUtils.lerp(16000, 36000, Math.sqrt(t));
+    waterUniforms.uFogNear.value = fog.near;
+    waterUniforms.uFogFar.value = fog.far;
+    atmo.setViewHeight(h);
+    atmo.update(simTime);
     if (phase === "menu") {
       _v1.copy(planeVel);
       if (_v1.lengthSq() < 1) _v1.set(0, 0, 1);
@@ -1664,6 +1617,11 @@ export function mountGame(
       _e.set(-0.22 + lookOffPitch, heading + lookOffYaw, bank * 0.65, "YXZ");
     } else {
       _e.set(bodyPitch, bodyYaw, bank, "YXZ");
+    }
+    if (shock > 0.01 && !reduce) {
+      _e.x -= shock * shock * 0.32;
+      _e.z += Math.sin(simTime * 29) * shock * 0.05;
+      camera.position.y += Math.sin(simTime * 41) * shock * 0.07;
     }
     camera.quaternion.setFromEuler(_e);
     const targetFov = phase === "freefall" || phase === "malfunction" ? 74 + Math.min(air, 80) * 0.1 : 72;
@@ -1830,6 +1788,8 @@ export function mountGame(
     canvas.removeEventListener("touchmove", onTouchMove);
     canvas.removeEventListener("touchend", onTouchEnd);
     audio.dispose();
+    atmo.dispose();
+    normalTex.dispose();
     if (window.__controlsTest === controlsTest) delete window.__controlsTest;
     const geos = new Set<THREE.BufferGeometry>();
     const mats = new Set<THREE.Material>();
