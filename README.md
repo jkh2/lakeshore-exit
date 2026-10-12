@@ -2,6 +2,8 @@
 
 First-person skydiving over the Chicago lakefront. Ride a Twin Otter east of the beach, walk to the door, and exit over Lake Michigan. Pull when you want. If the main fails, cut away and throw the reserve before the hard deck, then fly the canopy back to the sand.
 
+**[▶ Play Lakeshore Exit](https://www.jameskeithharwood.com/lakeshore-exit/)** in your browser. On a phone, use "Add to Home Screen" to install it like an app.
+
 ## Run
 
 ```bash
