@@ -316,7 +316,8 @@ export function cloudTexture(seed: number) {
         freq *= 2;
       }
       const base = 1 - clamp01((v - 0.66) / 0.06);
-      const dens = clamp01((d + (f - 0.5) * 0.55) * 2.4) * base;
+      const edge = clamp01(Math.min(u, 1 - u, v, 1 - v) * 10);
+      const dens = clamp01((d + (f - 0.5) * 0.55) * 2.4) * base * edge;
       const light = clamp01(0.55 + (0.6 - v) * 1.3 + (f - 0.5) * 0.5);
       const i = (y * size + x) * 4;
       img.data[i] = Math.round(178 + light * 77);

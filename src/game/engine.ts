@@ -16,6 +16,7 @@ import {
 } from "./constants";
 import { loadSave, writeSave } from "./save";
 import type { Bridge, Hud, Outcome, Phase } from "./types";
+import { createCanopy } from "./canopy";
 import { SUN_DIR, cityTexture, cloudTexture, createAtmosphere, createWaterMaterial } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
@@ -804,7 +805,8 @@ export function mountGame(
   beacon.position.set(0, 3.15, 3.3);
   plane.add(beacon);
 
-  const canopy = makeWing(false);
+  const canopyRig = createCanopy();
+  const canopy = canopyRig.group;
   canopy.visible = false;
   scene.add(canopy);
   const streamer = new THREE.Group();
@@ -849,6 +851,8 @@ export function mountGame(
   let lockedAlt = 12500 / FT_PER_M;
   let openT = 0;
   let shock = 0;
+  let brakeL = 0;
+  let brakeR = 0;
   let shockFired = false;
   let deployingReserve = false;
   let reserveArmed = false;
@@ -1116,7 +1120,6 @@ export function mountGame(
       const fz = -Math.cos(heading);
       vel.set(fx * 11 + WIND_X, -5.2, fz * 11 + WIND_Z);
       canopy.visible = true;
-      canopy.scale.setScalar(1);
       streamer.visible = false;
       lookOffYaw = 0;
       lookOffPitch = 0;
@@ -1247,7 +1250,7 @@ export function mountGame(
       localPitch = clamp(localPitch - lookDY * sens, -1.2, 1.05);
     } else if (phase === "canopy" || phase === "down") {
       lookOffYaw = clamp(lookOffYaw - lookDX * sens, -1.35, 1.35);
-      lookOffPitch = clamp(lookOffPitch - lookDY * sens, -1.0, 0.9);
+      lookOffPitch = clamp(lookOffPitch - lookDY * sens, -1.0, 1.5);
     } else if (phase === "freefall" || phase === "deploying" || phase === "malfunction") {
       bodyYaw -= lookDX * sens;
       bodyPitch = clamp(bodyPitch - lookDY * sens, -1.35, 1.15);
@@ -1361,6 +1364,10 @@ export function mountGame(
       heading += input.turn * 0.95 * dt;
       const brake = input.forward < -0.35 ? 1 : 0;
       const drive = input.forward > 0.35 ? 1 : 0;
+      const ease = 1 - Math.exp(-7 * dt);
+      const flareAmt = input.forward < -0.35 ? Math.min(1, -input.forward) : 0;
+      brakeL += (Math.max(flareAmt, Math.max(0, input.turn) * 0.75) - brakeL) * ease;
+      brakeR += (Math.max(flareAmt, Math.max(0, -input.turn) * 0.75) - brakeR) * ease;
       let fspd = 10.5 - brake * 6.2 + drive * 3.8;
       let desc = 5.4 - brake * 3.15 + drive * 0.85;
       if (brake && pos.y < 48) desc = Math.min(desc, 2.2);
@@ -1413,13 +1420,16 @@ export function mountGame(
       (phase === "malfunction" && mal === "twist");
     canopy.visible = showCanopy;
     if (showCanopy) {
-      const u = phase === "deploying" ? clamp(openT / 1.6, 0.15, 1) : 1;
-      canopy.scale.setScalar(u);
-      const fx = -Math.sin(heading);
-      const fz = -Math.cos(heading);
-      canopy.position.set(pos.x + fx * 2.2, pos.y + 2.15, pos.z + fz * 2.2);
-      canopy.rotation.set(0.15, heading, bank * 0.45);
-      paintWing(canopy, flying === "reserve" || deployingReserve);
+      const dur = deployingReserve ? 1.45 : 2.65;
+      const u = phase === "deploying" ? smooth(clamp((openT - 0.3) / (dur * 0.8), 0.02, 1)) : 1;
+      if (phase !== "canopy") {
+        brakeL = 0;
+        brakeR = 0;
+      }
+      canopy.position.copy(pos);
+      canopy.rotation.set(0, heading, bank * 0.45);
+      canopyRig.setReserve(flying === "reserve" || deployingReserve);
+      canopyRig.update(u, brakeL, brakeR);
     }
     streamer.visible = mal === "streamer" && (phase === "deploying" || phase === "malfunction");
     if (streamer.visible) {
@@ -1770,6 +1780,10 @@ export function mountGame(
     getWarning: () => hud.banner,
     inDoor: () => inDoor,
     getLocalX: () => riderX,
+    addLook: (dx: number, dy: number) => {
+      lookDX += dx;
+      lookDY += dy;
+    },
   };
   window.__controlsTest = controlsTest;
 
@@ -1789,6 +1803,7 @@ export function mountGame(
     canvas.removeEventListener("touchend", onTouchEnd);
     audio.dispose();
     atmo.dispose();
+    canopyRig.dispose();
     normalTex.dispose();
     if (window.__controlsTest === controlsTest) delete window.__controlsTest;
     const geos = new Set<THREE.BufferGeometry>();
@@ -1857,36 +1872,6 @@ function blade() {
   return g;
 }
 
-const wingColors = {
-  mainA: new THREE.MeshStandardMaterial({ color: "#c4322a", roughness: 0.55 }),
-  mainB: new THREE.MeshStandardMaterial({ color: "#f4f7fa", roughness: 0.5 }),
-  resA: new THREE.MeshStandardMaterial({ color: "#e0a020", roughness: 0.55 }),
-  resB: new THREE.MeshStandardMaterial({ color: "#f4f7fa", roughness: 0.5 }),
-};
-
-function makeWing(reserve: boolean) {
-  const g = new THREE.Group();
-  for (let i = -3; i <= 3; i++) {
-    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.28, 1.7), i % 2 === 0 ? wingColors.mainA : wingColors.mainB);
-    cell.position.set(i * 0.8, -Math.abs(i) * 0.08, 0);
-    cell.name = "cell";
-    g.add(cell);
-  }
-  g.userData.reserve = reserve;
-  return g;
-}
-
-function paintWing(g: THREE.Group, reserve: boolean) {
-  if (g.userData.reserve === reserve) return;
-  g.userData.reserve = reserve;
-  const a = reserve ? wingColors.resA : wingColors.mainA;
-  const b = reserve ? wingColors.resB : wingColors.mainB;
-  g.children.forEach((child, i) => {
-    const mesh = child as THREE.Mesh;
-    mesh.material = i % 2 === 0 ? a : b;
-  });
-}
-
 declare global {
   interface Window {
     __controlsTest?: {
@@ -1900,6 +1885,7 @@ declare global {
       getWarning?: () => string;
       inDoor?: () => boolean;
       getLocalX?: () => number;
+      addLook?: (dx: number, dy: number) => void;
     };
   }
 }
