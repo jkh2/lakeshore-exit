@@ -20,7 +20,7 @@ The dev server listens on port 8080.
 ## Jump
 
 - Exit altitude 8,000–20,000 ft. Malfunction chance 0–40%.
-- Cabin: mouse look, WASD to walk. Space only jumps from the door.
+- Cabin: mouse look, WASD to walk. The bar across the door lifts on the green light; run out the door to jump. The timer to green sits in the middle of the screen.
 - Freefall: mouse is body attitude. A/D turn, W arches, S dives.
 - Two jumpers leave just ahead of you and build a base with a slot open for you. Fly to the BASE marker and face in to dock. At 5,500 ft everyone breaks off: turn away, track, and get clear before you pull.
 - A cumulus deck sits around 6,000 ft. You fall straight through it: the world goes white, then opens up below. Real jumpers keep clear of clouds; here you get to feel one.

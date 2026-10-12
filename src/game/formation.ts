@@ -19,7 +19,8 @@ const OPEN_DUR = 2.65;
 
 type State = "freefall" | "track" | "deploying" | "canopy" | "down";
 
-const LOOKS: BodyLook[] = [
+/** Suits and helmets for the two other jumpers; the cabin seats them in the same colors. */
+export const LOOKS: BodyLook[] = [
   { suit: "#a3302b", suitDark: "#5e1b18", helmet: "#f1f3f5" },
   { suit: "#d8a31a", suitDark: "#6b5210", helmet: "#1b1e22" },
 ];

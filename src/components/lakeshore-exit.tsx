@@ -229,10 +229,22 @@ export function LakeshoreExit() {
           ) : null}
 
           <div className="absolute top-4 left-4 flex flex-col gap-2">
-            <div ref={lightRef} className="light-pill w-fit rounded-sm px-2 py-1 font-display text-sm tracking-widest" />
-            <div ref={spotRef} className="font-display text-lg tracking-wide text-fg" />
             <div ref={compassRef} className="font-display text-2xl tabular-nums text-fg" />
           </div>
+
+          {/* Before the jump the jump light and the time to green sit front and center. */}
+          {phase === "cabin" ? (
+            <div className="absolute top-[30%] left-1/2 flex -translate-x-1/2 flex-col items-center gap-2 text-center short:top-[44%] short:gap-1">
+              <div
+                ref={lightRef}
+                className="light-pill rounded-sm px-3 py-1 font-display text-lg tracking-widest"
+              />
+              <div
+                ref={spotRef}
+                className="font-display text-5xl leading-none whitespace-nowrap tabular-nums text-fg short:text-4xl desk:text-6xl"
+              />
+            </div>
+          ) : null}
 
           <div className="absolute top-4 right-4 text-right">
             <div className="font-display text-xs tracking-widest text-muted">
@@ -297,7 +309,7 @@ export function LakeshoreExit() {
 
           <p className="absolute right-4 bottom-4 hidden max-w-xs text-right text-sm text-muted desk:block">
             {phase === "cabin"
-              ? "WASD walk · mouse look · space jumps from the door"
+              ? "WASD walk · mouse look · run out the door on green"
               : phase === "freefall"
                 ? "A/D turn · W arch · S dive · space pulls"
                 : phase === "malfunction"
@@ -451,7 +463,7 @@ export function LakeshoreExit() {
             ) : null}
 
             <ul className="mt-4 space-y-1 text-sm text-muted">
-              <li>Cabin: look around, WASD to the door, space to exit.</li>
+              <li>Cabin: look around and walk to the door. On the green light the bar lifts: run out.</li>
               <li>Freefall: A and D turn, W arches, S dives, space pulls.</li>
               <li>Canopy: A and D turn, S flares. Land facing the lake, into the wind.</li>
             </ul>

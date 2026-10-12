@@ -18,7 +18,8 @@ import { loadSave, writeSave } from "./save";
 import type { Bridge, Hud, Outcome, Phase } from "./types";
 import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
-import { BASE_FALL, BREAKOFF_FT, createFormation } from "./formation";
+import { dressCabin } from "./cabin";
+import { BASE_FALL, BREAKOFF_FT, LOOKS, createFormation } from "./formation";
 import { createCloudField } from "./clouds";
 import { scoreJump } from "./score";
 import { createShadows, type ShadowCaster } from "./shadow";
@@ -250,25 +251,6 @@ function box(
   mesh.position.set(x, y, z);
   parent.add(mesh);
   return mesh;
-}
-
-function jumper(parent: THREE.Object3D, x: number, y: number, z: number, color: string, face: number) {
-  const g = new THREE.Group();
-  const suit = new THREE.MeshStandardMaterial({ color, roughness: 0.8 });
-  const skin = new THREE.MeshStandardMaterial({ color: "#c9a489", roughness: 0.7 });
-  const helm = new THREE.MeshStandardMaterial({ color: "#22262b", roughness: 0.45, metalness: 0.2 });
-  box(g, 0.42, 0.38, 0.28, 0, 0.62, 0, suit);
-  box(g, 0.46, 0.16, 0.55, 0, 0.32, 0.12, suit);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), skin);
-  head.position.set(0, 0.92, 0);
-  g.add(head);
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), helm);
-  helmet.position.set(0, 0.96, 0);
-  helmet.scale.y = 0.72;
-  g.add(helmet);
-  g.position.set(x, y, z);
-  g.rotation.y = face;
-  parent.add(g);
 }
 
 function drawTape(canvas: HTMLCanvasElement, altFt: number) {
@@ -782,11 +764,6 @@ export function mountGame(
   placard2.position.set(0.98, 1.24, 0.22);
   placard2.rotation.y = -Math.PI / 2;
   plane.add(placard2);
-  jumper(plane, -0.72, 0.46, -1.5, "#243044", 0);
-  jumper(plane, -0.72, 0.46, -0.4, "#9a3412", 0.4);
-  jumper(plane, -0.72, 0.46, 0.7, "#1a1c1f", -0.2);
-  jumper(plane, 0.72, 0.46, -1.3, "#c2a36b", Math.PI);
-  jumper(plane, 0.15, 0.2, -3.35, "#2a3340", Math.PI);
   const cabinLamp = new THREE.PointLight("#ffd2a8", 6, 7, 2);
   cabinLamp.position.set(0, 1.55, -0.2);
   plane.add(cabinLamp);
@@ -796,6 +773,7 @@ export function mountGame(
   );
   beacon.position.set(0, 3.15, 3.3);
   plane.add(beacon);
+  const cabin = dressCabin(plane, { inner, floor: floorM, seat: seatM, bar }, LOOKS);
 
   const canopyRig = createCanopy();
   const canopy = canopyRig.group;
@@ -875,6 +853,8 @@ export function mountGame(
   let usedReserve = false;
   let flying: "none" | "main" | "reserve" = "none";
   let leftOnRed = false;
+  /** The spotter's screen by the door: seconds to green, or GO. */
+  let spotShort = "";
   let doorBriefed = false;
   let warnedDecision = false;
   let beepAcc = 0;
@@ -884,6 +864,7 @@ export function mountGame(
   let walk = 0;
   let inDoor = false;
   let green = false;
+  let wasGreen = false;
   let outcome: Outcome | null = null;
   let camReady = false;
   const keys = new Set<string>();
@@ -1426,7 +1407,16 @@ export function mountGame(
         riderZ = nz;
       } else if (cabinOk(nx, riderZ)) riderX = nx;
       else if (cabinOk(riderX, nz)) riderZ = nz;
+      // The bar across the door holds you in until the green light lifts it. Then the door is
+      // open, and running out of it is the exit.
+      const doorOpen = cabin.barOpen() > 0.85;
+      const doorway = riderZ > 0.24 && riderZ < 1.72;
+      if (doorway && !doorOpen) riderX = Math.min(riderX, 1.0);
       inDoor = riderX > 0.8 && riderZ > 0.28 && riderZ < 1.7;
+      if (doorOpen && doorway && riderX >= 1.3 && dx > 0) {
+        tryJump();
+        return;
+      }
       if (inDoor && !doorBriefed) {
         doorBriefed = true;
         flashText = "PULL BY 4,500 FT — HARD DECK 2,000";
@@ -1615,6 +1605,13 @@ export function mountGame(
   function southboundLight(dir: THREE.Vector3) {
     const onRun = Math.abs(plane.position.x - RUN_X) < 90 && dir.z > 0.55;
     green = onRun && Math.abs(plane.position.z - DZ_Z) < 280;
+    if (green && !wasGreen && phase === "cabin") {
+      // The jump buzzer, and the bar starts up its posts.
+      audio.beep(660, 0.22, 0.07);
+      flashText = "GREEN LIGHT — GO!";
+      flashUntil = simTime + 2.2;
+    }
+    wasGreen = green;
     glow.color.set(green ? "#3dce73" : "#e23d3d");
     glow.emissive.set(green ? "#3dce73" : "#e23d3d");
   }
@@ -1664,11 +1661,11 @@ export function mountGame(
 
     let prompt = "";
     if (phase === "cabin") {
-      prompt = inDoor
-        ? green
-          ? "GREEN LIGHT — SPACE TO JUMP"
-          : "RED LIGHT — SPACE STILL JUMPS"
-        : "WALK TO THE DOOR";
+      prompt = green
+        ? "GREEN LIGHT — RUN OUT THE DOOR"
+        : inDoor
+          ? "RED LIGHT — WAIT FOR GREEN"
+          : "WALK TO THE DOOR";
     } else if (phase === "freefall") {
       if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
       else if (docked) prompt = "DOCKED · HOLD ON UNTIL BREAK-OFF";
@@ -1698,12 +1695,19 @@ export function mountGame(
     }
 
     let spot = "";
+    spotShort = "";
     if (phase === "cabin" || phase === "menu") {
       const onLine = Math.abs(plane.position.x - RUN_X) < 90 && planeVel.z > 0.5 * PLANE_MPS * 0.5;
-      if (!onLine) spot = "GO-AROUND";
-      else if (plane.position.z < -280) spot = `SPOT IN ${Math.max(0, Math.round((-280 - plane.position.z) / PLANE_MPS))}s`;
-      else if (plane.position.z > 280) spot = "PAST THE SPOT";
-      else spot = "ON THE SPOT";
+      const secs = Math.max(0, Math.round((-280 - plane.position.z) / PLANE_MPS));
+      if (green) spot = spotShort = "GO";
+      else if (!onLine) spot = spotShort = "GO-AROUND";
+      else if (plane.position.z < -280) {
+        spot = `GREEN IN ${secs}s`;
+        spotShort = `${secs}s`;
+      } else if (plane.position.z > 280) {
+        spot = "PAST THE SPOT";
+        spotShort = "PAST";
+      } else spot = spotShort = "ON THE SPOT";
     }
 
     const yaw =
@@ -1891,10 +1895,12 @@ export function mountGame(
       bodyQ.setFromEuler(bodyE).premultiply(plane.quaternion);
       bodyFrame.compose(_v3, bodyQ, one);
       if (inDoor) {
-        // Grab the door bar either side of the body while it is within reach.
+        // Grab the door bar either side of the body while it is within reach. Once it lifts on
+        // green, the hands follow it up to the frame above the door.
         bodyInv.copy(bodyFrame).invert();
         const zs = [clamp(riderZ - 0.32, 0.3, 1.6), clamp(riderZ + 0.32, 0.3, 1.6)];
-        const pts = zs.map((z) => plane.localToWorld(new THREE.Vector3(1.22, 1.05, z)).applyMatrix4(bodyInv));
+        const barY = Math.min(bar.position.y, 1.5);
+        const pts = zs.map((z) => plane.localToWorld(new THREE.Vector3(1.22, barY, z)).applyMatrix4(bodyInv));
         const [a, b] = pts as [THREE.Vector3, THREE.Vector3];
         const left = a.x < b.x ? a : b;
         const right = a.x < b.x ? b : a;
@@ -2004,7 +2010,41 @@ export function mountGame(
     castShadows();
     audioMix();
     publish(lastInput?.forward ?? 0);
+    cabin.update(frameDt, {
+      aboard: phase === "menu" || phase === "cabin",
+      green,
+      spot: spotShort,
+      time: simTime,
+    });
+    draw();
+  }
+
+  // The view spans 12 cm to 45 km, far more than one depth buffer can resolve: from altitude
+  // the beach, grass and road strips fought over the same pixels and flickered. So the world
+  // beyond SPLIT_M draws first with a near plane at SPLIT_M, then the depth buffer is cleared
+  // and everything closer (your body, the cabin, the formation, the canopy) draws on top.
+  const SPLIT_M = 40;
+  function draw() {
+    const near = camera.near;
+    const far = camera.far;
+    camera.near = SPLIT_M;
+    camera.updateProjectionMatrix();
     renderer.render(scene, camera);
+    // The sky dome pins itself to the far plane, so it would paint over the world here.
+    const background = scene.background;
+    scene.background = null;
+    sky.visible = false;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    camera.near = near;
+    camera.far = SPLIT_M * 1.002;
+    camera.updateProjectionMatrix();
+    renderer.render(scene, camera);
+    renderer.autoClear = true;
+    scene.background = background;
+    sky.visible = true;
+    camera.far = far;
+    camera.updateProjectionMatrix();
   }
 
   function resize() {
@@ -2131,6 +2171,7 @@ export function mountGame(
     cloudField.dispose();
     streaks.dispose();
     shadows.dispose();
+    cabin.dispose();
     body.dispose();
     formation.dispose();
     normalTex.dispose();
