@@ -24,6 +24,7 @@ import { createCloudField } from "./clouds";
 import { scoreJump } from "./score";
 import { createShadows, type ShadowCaster } from "./shadow";
 import { createStreaks } from "./streaks";
+import { CITY, createSkyline } from "./skyline";
 import { SUN_DIR, cityTexture, createAtmosphere, createWaterMaterial } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
@@ -34,6 +35,10 @@ const _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler(0, 0, 0, "YXZ");
 const _base = new THREE.Vector3();
+
+/** The title screen looks across Monroe Harbor at downtown. */
+const MENU_CAM = new THREE.Vector3(1800, 70, -1200);
+const MENU_CITY = new THREE.Vector3(-1078, 227, -2047);
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -130,89 +135,6 @@ function labelMat(text: string, fg: string, bg: string) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return new THREE.MeshBasicMaterial({ map: tex });
-}
-
-function facadeMaps(aniso: number) {
-  const paint = document.createElement("canvas");
-  paint.width = 64;
-  paint.height = 64;
-  const lights = document.createElement("canvas");
-  lights.width = 64;
-  lights.height = 64;
-  const g = paint.getContext("2d");
-  const lg = lights.getContext("2d");
-  if (!g || !lg) return null;
-  const rnd = mulberry(3);
-  g.fillStyle = "#c5ced6";
-  g.fillRect(0, 0, 64, 64);
-  lg.fillStyle = "#000";
-  lg.fillRect(0, 0, 64, 64);
-  for (let row = 0; row < 2; row++) {
-    for (let col = 0; col < 2; col++) {
-      const x0 = col * 32;
-      const y0 = row * 32;
-      g.fillStyle = "#8d98a2";
-      g.fillRect(x0, y0, 32, 3);
-      g.fillRect(x0, y0, 3, 32);
-      const lit = rnd() > 0.78;
-      g.fillStyle = lit ? "#d7e7f4" : "#1c2934";
-      g.fillRect(x0 + 6, y0 + 5, 20, 22);
-      g.fillStyle = "rgba(255,255,255,0.2)";
-      g.fillRect(x0 + 6, y0 + 5, 7, 22);
-      if (lit) {
-        lg.fillStyle = "#ffc48a";
-        lg.fillRect(x0 + 6, y0 + 5, 20, 22);
-      }
-    }
-  }
-  const map = new THREE.CanvasTexture(paint);
-  const glow = new THREE.CanvasTexture(lights);
-  for (const tex of [map, glow]) {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = aniso;
-  }
-  return { map, lights: glow };
-}
-
-function scaleFacadeUvs(geo: THREE.BufferGeometry, w: number, h: number, d: number) {
-  const uv = geo.getAttribute("uv");
-  const scales = [
-    [d, h],
-    [d, h],
-    [w, d],
-    [w, d],
-    [w, h],
-    [w, h],
-  ];
-  for (let f = 0; f < 6; f++) {
-    const su = (scales[f]?.[0] ?? 1) * 0.11;
-    const sv = (scales[f]?.[1] ?? 1) * 0.13;
-    for (let i = 0; i < 4; i++) {
-      const idx = f * 4 + i;
-      uv.setXY(idx, uv.getX(idx) * su, uv.getY(idx) * sv);
-    }
-  }
-  uv.needsUpdate = true;
-}
-
-function facadeBox(
-  parent: THREE.Object3D,
-  w: number,
-  h: number,
-  d: number,
-  x: number,
-  y: number,
-  z: number,
-  mat: THREE.Material,
-) {
-  const geo = new THREE.BoxGeometry(w, h, d);
-  scaleFacadeUvs(geo, w, h, d);
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(x, y, z);
-  parent.add(mesh);
-  return mesh;
 }
 
 function strut(
@@ -352,7 +274,9 @@ export function mountGame(
   const farMap = cityTexture(9, 1024, 8, aniso);
   const sandMap = tile("sand");
   const roadMap = tile("road");
-  if (cityMap) cityMap.repeat.set(2500 / 820, 6200 / 820);
+  const cityW = CITY.x1 - CITY.x0;
+  const cityD = CITY.z1 - CITY.z0;
+  if (cityMap) cityMap.repeat.set(cityW / 820, cityD / 820);
   if (farMap) farMap.repeat.set(1, 1);
 
   const cityMat = new THREE.MeshStandardMaterial({ map: cityMap ?? undefined, color: "#d9dcdf", roughness: 0.95 });
@@ -383,11 +307,12 @@ export function mountGame(
   farShape.lineTo(SHORE_X - 40, WORLD);
   farShape.lineTo(-WORLD, WORLD);
   farShape.closePath();
+  // Shape y becomes world -z once the mesh is laid flat.
   const farHole = new THREE.Path();
-  farHole.moveTo(-2508, -3100);
-  farHole.lineTo(-2508, 3100);
-  farHole.lineTo(SHORE_X - 40, 3100);
-  farHole.lineTo(SHORE_X - 40, -3100);
+  farHole.moveTo(CITY.x0, -CITY.z1);
+  farHole.lineTo(CITY.x0, -CITY.z0);
+  farHole.lineTo(SHORE_X - 40, -CITY.z0);
+  farHole.lineTo(SHORE_X - 40, -CITY.z1);
   farHole.closePath();
   farShape.holes.push(farHole);
   const farGeo = new THREE.ShapeGeometry(farShape);
@@ -402,9 +327,9 @@ export function mountGame(
   farLand.frustumCulled = false;
   scene.add(farLand);
 
-  const land = new THREE.Mesh(new THREE.PlaneGeometry(2500, 6200), cityMat);
+  const land = new THREE.Mesh(new THREE.PlaneGeometry(cityW, cityD), cityMat);
   land.rotation.x = -Math.PI / 2;
-  land.position.set(-1258, 0, 0);
+  land.position.set((CITY.x0 + CITY.x1) / 2, 0, (CITY.z0 + CITY.z1) / 2);
   land.frustumCulled = false;
   scene.add(land);
   if (sandMap) sandMap.repeat.set(18, 40 * (WORLD / 3100));
@@ -419,66 +344,8 @@ export function mountGame(
   road.rotation.x = -Math.PI / 2;
   road.position.set(-18, 0.07, 0);
   scene.add(road);
-  const park = new THREE.Mesh(new THREE.PlaneGeometry(150, 380), onTop(grassMat, 1));
-  park.rotation.x = -Math.PI / 2;
-  park.position.set(-115, 0.08, -390);
-  scene.add(park);
 
-  const facades = facadeMaps(renderer.capabilities.getMaxAnisotropy());
-  const bMat = new THREE.MeshStandardMaterial({
-    color: "#d5dde4",
-    map: facades?.map,
-    emissive: new THREE.Color("#ffb56a"),
-    emissiveMap: facades?.lights,
-    emissiveIntensity: 0.55,
-    roughness: 0.62,
-    metalness: 0.16,
-  });
-  bMat.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <uv_vertex>",
-      `#include <uv_vertex>
-       #ifdef USE_INSTANCING
-         vec2 facadeUv = vec2(max(instanceMatrix[0][0], instanceMatrix[2][2]), instanceMatrix[1][1]) * vec2(0.085, 0.1);
-         #ifdef USE_MAP
-           vMapUv *= facadeUv;
-         #endif
-         #ifdef USE_EMISSIVEMAP
-           vEmissiveMapUv *= facadeUv;
-         #endif
-       #endif`,
-    );
-  };
-  const rnd = mulberry(7);
-  const count = 180;
-  const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), bMat, count);
-  inst.frustumCulled = false;
-  const dummy = new THREE.Object3D();
-  const color = new THREE.Color();
-  let placed = 0;
-  for (let i = 0; i < 400 && placed < count; i++) {
-    const x = -70 - rnd() * 720;
-    const z = -1100 + rnd() * 1700;
-    const inPark = x > -200 && x < -30 && z > -580 && z < -180;
-    if (inPark) continue;
-    if (Math.hypot(x + 250, z + 620) < 80) continue;
-    const downtown = z < -280 && z > -980 && x > -520 && x < -90;
-    const h = downtown ? 40 + rnd() * 200 : 12 + rnd() * 48;
-    const bw = 16 + rnd() * 22;
-    const bd = 16 + rnd() * 22;
-    dummy.position.set(x, h / 2, z);
-    dummy.scale.set(bw, h, bd);
-    dummy.rotation.set(0, 0, 0);
-    dummy.updateMatrix();
-    inst.setMatrixAt(placed, dummy.matrix);
-    color.setHSL(0.58, 0.06, 0.32 + rnd() * 0.22);
-    inst.setColorAt(placed, color);
-    placed++;
-  }
-  inst.count = placed;
-  inst.instanceMatrix.needsUpdate = true;
-  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-  scene.add(inst);
+  const skyline = createSkyline(scene, { aniso, coarse, onTop });
 
   const verge = new THREE.Mesh(new THREE.PlaneGeometry(40, WORLD * 2), onTop(grassMat.clone(), 2));
   verge.rotation.x = -Math.PI / 2;
@@ -494,6 +361,7 @@ export function mountGame(
   wet.frustumCulled = false;
   scene.add(wet);
 
+  const dummy = new THREE.Object3D();
   const treeRnd = mulberry(11);
   const barkMat = new THREE.MeshStandardMaterial({ color: "#6a5340", roughness: 1 });
   const leafMat = new THREE.MeshStandardMaterial({ color: "#2d6a3e", roughness: 0.92 });
@@ -525,78 +393,9 @@ export function mountGame(
 
   const dark = new THREE.MeshStandardMaterial({ color: "#1b2128", roughness: 0.55, metalness: 0.25 });
   const steel = new THREE.MeshStandardMaterial({ color: "#c5ced6", roughness: 0.35, metalness: 0.55 });
-  const towerMat = new THREE.MeshStandardMaterial({
-    color: "#d7dee5",
-    map: facades?.map,
-    emissive: new THREE.Color("#ffb56a"),
-    emissiveMap: facades?.lights,
-    emissiveIntensity: 0.45,
-    roughness: 0.48,
-    metalness: 0.28,
-  });
-  const darkTower = towerMat.clone();
-  darkTower.color.set("#3a4450");
-  darkTower.emissiveIntensity = 0.62;
-  const willis = new THREE.Group();
-  const heights = [250, 320, 250, 340, 430, 340, 250, 320, 250];
-  for (let i = 0; i < 9; i++) {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    const h = heights[i] ?? 200;
-    facadeBox(willis, 18, h, 18, (col - 1) * 20, h / 2, (row - 1) * 20, darkTower);
-  }
-  box(willis, 1.2, 70, 1.2, 0, 465, 0, steel);
-  willis.position.set(-280, 0, -640);
-  scene.add(willis);
-  facadeBox(scene, 42, 346, 42, -150, 173, -500, towerMat);
-  const hGeo = new THREE.CylinderGeometry(12, 22, 340, 4);
-  hGeo.rotateY(Math.PI / 4);
-  const hancockMat = new THREE.MeshStandardMaterial({ color: "#1c232b", roughness: 0.42, metalness: 0.48 });
-  const hancock = new THREE.Mesh(hGeo, hancockMat);
-  hancock.position.set(-360, 170, -860);
-  scene.add(hancock);
-  for (const lean of [-0.16, 0.16]) {
-    const brace = new THREE.Mesh(new THREE.BoxGeometry(1.4, 300, 1.4), steel);
-    brace.position.set(-360, 160, -860);
-    brace.rotation.z = lean;
-    scene.add(brace);
-  }
-  box(scene, 2, 46, 2, -360, 360, -860, steel);
-
-  const pierMat = new THREE.MeshStandardMaterial({ color: "#b7c0c6", roughness: 0.7 });
-  box(scene, 340, 2.2, 34, 180, 1.2, -430, pierMat);
-  box(scene, 80, 10, 22, 70, 6, -430, new THREE.MeshStandardMaterial({ color: "#d9e0e4" }));
-  const ferris = new THREE.Group();
-  const wheel = new THREE.Group();
   const white = new THREE.MeshStandardMaterial({ color: "#f4f7fa", roughness: 0.45 });
   const redM = new THREE.MeshStandardMaterial({ color: "#c4322a", roughness: 0.5 });
   const amberM = new THREE.MeshStandardMaterial({ color: "#e0a020", roughness: 0.5 });
-  wheel.add(new THREE.Mesh(new THREE.TorusGeometry(26, 0.55, 8, 36), white));
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * Math.PI * 2;
-    const spoke = new THREE.Mesh(new THREE.BoxGeometry(26, 0.35, 0.35), white);
-    spoke.position.set(Math.cos(a) * 13, Math.sin(a) * 13, 0);
-    spoke.rotation.z = a;
-    wheel.add(spoke);
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 2.6), i % 2 ? redM : amberM);
-    cab.position.set(Math.cos(a) * 26, Math.sin(a) * 26, 0);
-    wheel.add(cab);
-  }
-  ferris.add(wheel);
-  ferris.rotation.y = Math.PI / 2;
-  ferris.position.set(330, 30, -430);
-  scene.add(ferris);
-  const bowl = new THREE.Mesh(
-    new THREE.TorusGeometry(68, 14, 8, 28),
-    new THREE.MeshStandardMaterial({ color: "#9aa3ab", roughness: 0.8 }),
-  );
-  bowl.rotation.x = Math.PI / 2;
-  bowl.position.set(-120, 6, -180);
-  scene.add(bowl);
-  const field = new THREE.Mesh(new THREE.CircleGeometry(48, 20), grassMat);
-  field.rotation.x = -Math.PI / 2;
-  field.position.set(-120, 0.2, -180);
-  scene.add(field);
 
   const ringMat = (hex: string) =>
     onTop(new THREE.MeshBasicMaterial({ color: hex, side: THREE.DoubleSide }), 4);
@@ -644,7 +443,7 @@ export function mountGame(
     wake.rotation.x = -Math.PI / 2;
     wake.position.set(-22, 0.2, 0);
     b.add(wake);
-    b.position.set(420 + i * 180, 0.4, -200 + i * 260);
+    b.position.set(940 + i * 170, 0.4, -200 + i * 260);
     scene.add(b);
     boats.push(b);
   }
@@ -866,7 +665,6 @@ export function mountGame(
   let green = false;
   let wasGreen = false;
   let outcome: Outcome | null = null;
-  let camReady = false;
   const keys = new Set<string>();
   let qaKeys: Set<string> | null = null;
   let prevQa = new Set<string>();
@@ -1361,7 +1159,7 @@ export function mountGame(
     southboundLight(_v1);
     waterUniforms.uTime.value = simTime;
     waterUniforms.uCam.value.copy(camera.position);
-    wheel.rotation.z += dt * 0.28;
+    skyline.update(dt);
     sock.rotation.y = Math.sin(simTime * 7) * 0.12;
     (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity =
       Math.sin(simTime * 8) > 0.4 ? 2 : 0.15;
@@ -1369,9 +1167,8 @@ export function mountGame(
       const boat = boats[i];
       if (!boat) continue;
       boat.position.z += dt * (6 + i);
-      if (boat.position.z > 1800) boat.position.z = -1800;
+      if (boat.position.z > 1800) boat.position.z = -1100;
     }
-    ferris.position.y = 30 + Math.sin(simTime * 0.6) * 0;
 
     if (!input) return;
     const sens = 0.00215;
@@ -1779,7 +1576,7 @@ export function mountGame(
     onFrame(hud);
   }
 
-  function frameCamera(dt: number) {
+  function frameCamera() {
     sky.position.copy(camera.position);
     const h = camera.position.y;
     const t = clamp(h / 4500, 0, 1);
@@ -1790,21 +1587,15 @@ export function mountGame(
     atmo.setViewHeight(h);
     atmo.update(simTime);
     if (phase === "menu") {
-      _v1.copy(planeVel);
-      if (_v1.lengthSq() < 1) _v1.set(0, 0, 1);
-      _v1.normalize();
-      _v2.copy(plane.position).addScaledVector(_v1, -38);
-      _v2.x += 24;
-      _v2.y += 12;
-      if (!camReady || camera.position.distanceTo(_v2) > 400) {
-        camera.position.copy(_v2);
-        camReady = true;
-      } else camera.position.lerp(_v2, 1 - Math.exp(-1.8 * dt));
-      _v3.copy(plane.position);
-      _v3.x -= 48;
-      _v3.y += 1.4;
-      camera.lookAt(_v3);
-      camera.fov = 68;
+      // Title shot: drifting over the harbor with downtown ahead.
+      camera.position.set(
+        MENU_CAM.x + Math.sin(simTime * 0.031) * 90,
+        MENU_CAM.y + Math.sin(simTime * 0.047) * 12,
+        MENU_CAM.z + Math.sin(simTime * 0.023) * 220,
+      );
+      camera.lookAt(MENU_CITY);
+      // About 76 degrees across whatever the screen's shape, with the skyline right of the menu.
+      camera.fov = clamp(THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(0.66) / camera.aspect)), 30, 75);
       camera.updateProjectionMatrix();
       return;
     }
@@ -2003,7 +1794,7 @@ export function mountGame(
       acc -= 1 / 60;
       guard++;
     }
-    frameCamera(frameDt);
+    frameCamera();
     airFx();
     poseBody(frameDt);
     formation.draw(frameDt, simTime);

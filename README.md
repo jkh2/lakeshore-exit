@@ -30,4 +30,8 @@ The dev server listens on port 8080.
 - Audible altimeter and a full-screen banner at 4,500 ft. Pull-now at 3,000. Hard deck at 2,000.
 - A bad main is a streamer or a line twist. Cut away, then deploy the reserve. Too low and you go in.
 
+## Chicago
+
+The lakefront is at true scale around the drop zone at 12th Street Beach. Willis Tower stands about 2.4 km to the northwest, the Hancock 4 km up the shore and Navy Pier reaches a kilometer into the lake 3 km north. Twenty-three landmark towers sit at their real latitude and longitude, measured from the lake edge because the game's shore is straight. Grant Park, Buckingham Fountain, the river and its branches, Monroe Harbor's moored boats, Museum Campus, Soldier Field and the Centennial Wheel are there too. Everything is drawn in code; `src/game/skyline.ts` holds the places and the heights.
+
 Best beach landing is saved in the browser.
