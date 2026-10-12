@@ -8,6 +8,18 @@ export type Phase =
   | "down"
   | "impact";
 
+export type ScoreItem = { label: string; pts: number; max: number; note: string };
+
+export type JumpScore = {
+  total: number;
+  max: number;
+  /** 0 to 3. */
+  stars: number;
+  items: ScoreItem[];
+  /** Beat the saved best score on this jump. */
+  newBest: boolean;
+};
+
 export type Outcome = {
   kind: "landed" | "water" | "impact";
   distanceM: number;
@@ -18,11 +30,13 @@ export type Outcome = {
   onBeach: boolean;
   log: string[];
   reason: string;
+  score: JumpScore;
 };
 
 export type Save = {
   v: 1;
   bestM: number | null;
+  bestScore: number | null;
   jumps: number;
   rides: number;
   altitudeFt: number;
@@ -72,7 +86,7 @@ export type Hud = {
   outcome: Outcome | null;
   canopy: "none" | "main" | "reserve";
   needsLook: boolean;
-  save: Pick<Save, "bestM" | "jumps" | "rides">;
+  save: Pick<Save, "bestM" | "bestScore" | "jumps" | "rides">;
 };
 
 export function createBridge(): Bridge {

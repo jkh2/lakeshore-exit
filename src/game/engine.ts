@@ -20,6 +20,8 @@ import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
 import { BASE_FALL, BREAKOFF_FT, createFormation } from "./formation";
 import { createCloudField } from "./clouds";
+import { scoreJump } from "./score";
+import { createShadows, type ShadowCaster } from "./shadow";
 import { createStreaks } from "./streaks";
 import { SUN_DIR, cityTexture, createAtmosphere, createWaterMaterial } from "./world";
 
@@ -803,6 +805,8 @@ export function mountGame(
   // Phones get fewer, bigger puffs: the same clouds for less overdraw.
   const cloudField = createCloudField(scene, coarse ? 0.6 : 1);
   const streaks = createStreaks(scene);
+  const shadows = createShadows(scene);
+  const casters: ShadowCaster[] = [];
   let cloudDensity = 0;
   let cloudLogged = false;
   canopy.visible = false;
@@ -856,6 +860,10 @@ export function mountGame(
   /** After letting go, no assist or re-dock for a moment so the player can actually leave. */
   let dockAgainAt = 0;
   let dockedOnce = false;
+  /** For the scorecard: where you first docked, pulled, and how much air you had at the pull. */
+  let dockedFt: number | null = null;
+  let pullFt: number | null = null;
+  let pullSep: number | null = null;
   let brokeOff = false;
   let exitTime = 0;
   let gestureStart = 0;
@@ -916,11 +924,16 @@ export function mountGame(
     outcome: null,
     canopy: "none",
     needsLook: false,
-    save: { bestM: save.bestM, jumps: save.jumps, rides: save.rides },
+    save: { bestM: save.bestM, bestScore: save.bestScore, jumps: save.jumps, rides: save.rides },
   };
 
   function persist() {
-    hud.save = { bestM: save.bestM, jumps: save.jumps, rides: save.rides };
+    hud.save = {
+      bestM: save.bestM,
+      bestScore: save.bestScore,
+      jumps: save.jumps,
+      rides: save.rides,
+    };
     writeSave(save);
   }
 
@@ -946,6 +959,8 @@ export function mountGame(
     beepAcc = 0;
     flashText = "";
     cloudLogged = false;
+    pullFt = null;
+    pullSep = null;
     canopy.visible = false;
     streamer.visible = false;
     resetFormation();
@@ -969,6 +984,7 @@ export function mountGame(
     formation.reset();
     docked = false;
     dockedOnce = false;
+    dockedFt = null;
     brokeOff = false;
     dockAgainAt = 0;
   }
@@ -988,23 +1004,32 @@ export function mountGame(
     if (log.length > 10) log.shift();
   }
 
+  /** Scores the jump and keeps the best. Called once per jump, as it ends. */
+  function score(facts: Omit<Outcome, "log" | "reason" | "score">) {
+    const result = scoreJump({ ...facts, dockedFt, pullFt, sepM: pullSep });
+    if (facts.kind !== "impact" && result.total > (save.bestScore ?? 0)) {
+      result.newBest = true;
+      save.bestScore = result.total;
+    }
+    return result;
+  }
+
   function finishImpact(reason: string) {
     if (phase === "impact" || phase === "down") return;
     phase = "impact";
     pos.y = Math.max(pos.y, 0);
     vel.set(0, 0, 0);
     pushLog(reason);
-    outcome = {
-      kind: "impact",
+    const facts = {
+      kind: "impact" as const,
       distanceM: Math.hypot(pos.x - DZ_X, pos.z - DZ_Z),
       usedReserve,
       redLight: leftOnRed,
       intoWind: false,
       hot: true,
       onBeach: false,
-      log: log.slice(),
-      reason,
     };
+    outcome = { ...facts, log: log.slice(), reason, score: score(facts) };
     audio.update(0, 0, 0);
     audio.death();
     persist();
@@ -1019,30 +1044,17 @@ export function mountGame(
     const onBeach = pos.x >= -8 && pos.x <= SHORE_X + 6;
     pos.y = 0;
     vel.y = 0;
-    if (water) {
-      outcome = {
-        kind: "water",
-        distanceM: dist,
-        usedReserve,
-        redLight: leftOnRed,
-        intoWind,
-        hot,
-        onBeach: false,
-        log: log.slice(),
-        reason: "Water",
-      };
-    } else {
-      outcome = {
-        kind: "landed",
-        distanceM: dist,
-        usedReserve,
-        redLight: leftOnRed,
-        intoWind,
-        hot,
-        onBeach,
-        log: log.slice(),
-        reason: "",
-      };
+    const facts = {
+      kind: water ? ("water" as const) : ("landed" as const),
+      distanceM: dist,
+      usedReserve,
+      redLight: leftOnRed,
+      intoWind,
+      hot,
+      onBeach: !water && onBeach,
+    };
+    outcome = { ...facts, log: log.slice(), reason: water ? "Water" : "", score: score(facts) };
+    if (!water) {
       save.rides += 1;
       if (onBeach && (save.bestM === null || dist < save.bestM)) save.bestM = Math.round(dist * 10) / 10;
     }
@@ -1157,6 +1169,7 @@ export function mountGame(
       audio.beep(1175, 0.14, 0.06);
       if (!dockedOnce) {
         dockedOnce = true;
+        dockedFt = pos.y * FT_PER_M;
         const ft = Math.round(pos.y * FT_PER_M).toLocaleString("en-US");
         pushLog(`Docked at ${ft} ft · ${(simTime - exitTime).toFixed(1)} s after exit`);
       }
@@ -1181,8 +1194,10 @@ export function mountGame(
       docked = false;
       formation.setPlayerDocked(false);
     }
+    pullFt = alt;
     if (formation.started()) {
       const near = formation.nearest(pos);
+      pullSep = Number.isFinite(near) ? near : null;
       if (near < 25) {
         pushLog(`Opened ${Math.round(near)} m from another jumper`);
         flashText = "TOO CLOSE — TRACK AWAY BEFORE YOU PULL";
@@ -1917,6 +1932,15 @@ export function mountGame(
 
   const airVel = new THREE.Vector3();
 
+  /** Your shadow and the other jumpers' on the ground, once you're low enough to see them. */
+  function castShadows() {
+    casters.length = 0;
+    const out = phase !== "menu" && phase !== "cabin" && phase !== "impact";
+    if (out) casters.push({ feet: pos, wing: canopy.visible ? canopy : null });
+    formation.casters(casters);
+    shadows.update(casters, camera.position);
+  }
+
   // Clouds and the air rushing past: how deep in cloud the eye is, the whiteout veil, and
   // streaks that scale with airspeed (and thicken inside a cloud).
   function airFx() {
@@ -1977,6 +2001,7 @@ export function mountGame(
     airFx();
     poseBody(frameDt);
     formation.draw(frameDt, simTime);
+    castShadows();
     audioMix();
     publish(lastInput?.forward ?? 0);
     renderer.render(scene, camera);
@@ -2105,6 +2130,7 @@ export function mountGame(
     canopyRig.dispose();
     cloudField.dispose();
     streaks.dispose();
+    shadows.dispose();
     body.dispose();
     formation.dispose();
     normalTex.dispose();

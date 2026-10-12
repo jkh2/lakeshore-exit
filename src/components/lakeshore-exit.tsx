@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clsx } from "clsx";
-import { AlertTriangle, Plane, RotateCcw, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Plane, RotateCcw, Star, Volume2, VolumeX } from "lucide-react";
 import { cardinal, describeOutcome } from "@/game/grade";
 import { loadSave } from "@/game/save";
 import {
@@ -12,7 +12,14 @@ import {
   MIN_EXIT_FT,
   PULL_NOW_FT,
 } from "@/game/constants";
-import { createBridge, type Bridge, type Hud, type Outcome, type Phase } from "@/game/types";
+import {
+  createBridge,
+  type Bridge,
+  type Hud,
+  type JumpScore,
+  type Outcome,
+  type Phase,
+} from "@/game/types";
 
 function commas(n: number) {
   return Math.round(n).toLocaleString("en-US");
@@ -62,7 +69,7 @@ export function LakeshoreExit() {
   const [malPct, setMalPct] = useState(DEFAULT_MAL_PCT);
   const [muted, setMuted] = useState(false);
   const [bootError, setBootError] = useState("");
-  const [record, setRecord] = useState({ bestM: null as number | null, jumps: 0, rides: 0 });
+  const [record, setRecord] = useState<Hud["save"]>({ bestM: null, bestScore: null, jumps: 0, rides: 0 });
 
   const cache = useRef({
     phase: "menu" as Phase,
@@ -74,6 +81,7 @@ export function LakeshoreExit() {
     canopy: "none" as "none" | "main" | "reserve",
     jumps: -1,
     best: null as number | null,
+    bestScore: null as number | null,
     rides: -1,
   });
 
@@ -133,11 +141,13 @@ export function LakeshoreExit() {
       c.canopy = hud.canopy;
       setCanopy(hud.canopy);
     }
-    if (c.jumps !== hud.save.jumps || c.best !== hud.save.bestM || c.rides !== hud.save.rides) {
-      c.jumps = hud.save.jumps;
-      c.best = hud.save.bestM;
-      c.rides = hud.save.rides;
-      setRecord({ bestM: hud.save.bestM, jumps: hud.save.jumps, rides: hud.save.rides });
+    const s = hud.save;
+    if (c.jumps !== s.jumps || c.best !== s.bestM || c.bestScore !== s.bestScore || c.rides !== s.rides) {
+      c.jumps = s.jumps;
+      c.best = s.bestM;
+      c.bestScore = s.bestScore;
+      c.rides = s.rides;
+      setRecord({ ...s });
     }
   };
 
@@ -149,7 +159,7 @@ export function LakeshoreExit() {
     bridgeRef.current.malChance = mal / 100;
     setAltitudeFt(alt);
     setMalPct(mal);
-    setRecord({ bestM: saved.bestM, jumps: saved.jumps, rides: saved.rides });
+    setRecord({ bestM: saved.bestM, bestScore: saved.bestScore, jumps: saved.jumps, rides: saved.rides });
     const bridge = bridgeRef.current;
     let stop = () => {};
     let gone = false;
@@ -436,6 +446,7 @@ export function LakeshoreExit() {
               <p className="mt-3 text-sm text-muted">
                 {record.jumps} jumps · {record.rides} rides down
                 {record.bestM !== null ? ` · best ${record.bestM} m` : ""}
+                {record.bestScore !== null ? ` · top score ${record.bestScore}` : ""}
               </p>
             ) : null}
 
@@ -454,18 +465,24 @@ export function LakeshoreExit() {
         <div className="pointer-events-none absolute inset-0 z-40 grid place-items-center p-4">
           <section
             className={clsx(
-              "pointer-events-auto w-full max-w-md rounded-2xl border border-line bg-panel p-5",
+              "pointer-events-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-line bg-panel p-5",
               outcome.kind === "impact" && "debrief-late",
             )}
           >
             <p className="font-display text-sm tracking-[0.2em] text-muted">DEBRIEF</p>
             <h2 className="mt-1 font-display text-5xl leading-none font-semibold">{copy.title}</h2>
             <p className="mt-3 text-sm leading-relaxed text-muted">{copy.lede}</p>
-            <ol className="mt-4 space-y-1 text-sm text-fg">
-              {outcome.log.map((line, i) => (
-                <li key={`${line}-${i}`}>{line}</li>
-              ))}
-            </ol>
+            <Scorecard score={outcome.score} />
+            <details className="mt-4 text-sm">
+              <summary className="cursor-pointer font-display tracking-widest text-muted">
+                JUMP LOG
+              </summary>
+              <ol className="mt-2 space-y-1 text-fg">
+                {outcome.log.map((line, i) => (
+                  <li key={`${line}-${i}`}>{line}</li>
+                ))}
+              </ol>
+            </details>
             <button
               type="button"
               className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-amber font-display text-xl tracking-widest text-ink"
@@ -480,6 +497,47 @@ export function LakeshoreExit() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function Scorecard({ score }: { score: JumpScore }) {
+  return (
+    <div className="mt-4 border-t border-line pt-4">
+      <div className="flex items-end gap-3">
+        <p className="font-display text-6xl leading-none font-semibold tabular-nums text-amber">
+          {score.total}
+          <span className="ml-1 text-xl text-muted">/{score.max}</span>
+        </p>
+        <div className="mb-1">
+          <div className="flex gap-0.5" role="img" aria-label={`${score.stars} of 3 stars`}>
+            {[0, 1, 2].map((i) => (
+              <Star
+                key={i}
+                aria-hidden="true"
+                className={clsx("size-5", i < score.stars ? "fill-amber text-amber" : "text-line")}
+              />
+            ))}
+          </div>
+          {score.newBest ? (
+            <p className="mt-1 w-fit rounded-sm bg-amber px-1.5 font-display text-xs tracking-widest text-ink">
+              NEW BEST
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <dl className="mt-3 grid grid-cols-[auto_1fr_auto] gap-x-3 gap-y-1 text-sm">
+        {score.items.map((item) => (
+          <div key={item.label} className="contents">
+            <dt className="font-display tracking-wide text-muted">{item.label}</dt>
+            <dd className={item.pts > 0 ? "text-fg" : "text-muted"}>{item.note}</dd>
+            <dd className="text-right tabular-nums">
+              <span className={item.pts === item.max ? "text-amber" : "text-fg"}>{item.pts}</span>
+              <span className="text-muted">/{item.max}</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
