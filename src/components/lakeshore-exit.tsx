@@ -44,6 +44,8 @@ export function LakeshoreExit() {
   const dzRef = useRef<HTMLDivElement>(null);
   const dzArrowRef = useRef<HTMLDivElement>(null);
   const doorRef = useRef<HTMLDivElement>(null);
+  const baseRef = useRef<HTMLDivElement>(null);
+  const baseLabelRef = useRef<HTMLDivElement>(null);
   const poseRef = useRef<HTMLDivElement>(null);
   const lightRef = useRef<HTMLDivElement>(null);
   const bridgeRef = useRef<Bridge>(createBridge());
@@ -91,6 +93,12 @@ export function LakeshoreExit() {
       doorRef.current.style.left = `${hud.doorU * 100}%`;
       doorRef.current.style.top = `${hud.doorV * 100}%`;
     }
+    if (baseRef.current) {
+      baseRef.current.style.opacity = hud.baseVisible ? "1" : "0";
+      baseRef.current.style.left = `${hud.baseU * 100}%`;
+      baseRef.current.style.top = `${hud.baseV * 100}%`;
+    }
+    if (baseLabelRef.current) baseLabelRef.current.textContent = hud.baseLabel;
     if (lightRef.current) {
       lightRef.current.textContent = hud.green ? "GREEN LIGHT" : "RED LIGHT";
       lightRef.current.classList.toggle("is-green", hud.green);
@@ -188,6 +196,15 @@ export function LakeshoreExit() {
             className="absolute -translate-x-1/2 -translate-y-1/2 font-display text-sm tracking-widest text-amber"
           >
             DOOR
+          </div>
+          <div ref={baseRef} className="absolute opacity-0">
+            <div
+              className="absolute size-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-amber/90"
+            />
+            <div
+              ref={baseLabelRef}
+              className="absolute bottom-6 -translate-x-1/2 rounded-sm bg-panel/60 px-1.5 font-display text-sm whitespace-nowrap tracking-widest text-amber"
+            />
           </div>
           {banner ? (
             <div

@@ -70,7 +70,8 @@ export type Canopy = {
   dispose: () => void;
 };
 
-export function createCanopy(): Canopy {
+/** Nine cell colors, left to right. */
+export function createCanopy(colors: readonly string[] = MAIN): Canopy {
   const group = new THREE.Group();
   const bump = ripstop();
 
@@ -164,7 +165,7 @@ export function createCanopy(): Canopy {
   const trim = new THREE.Matrix4().makeRotationX(TRIM);
   const p = new THREE.Vector3();
   const col = new THREE.Color();
-  let palette = MAIN;
+  let palette = colors;
   let colorsDirty = true;
   let last = [-1, -1, -1];
 
@@ -315,7 +316,7 @@ export function createCanopy(): Canopy {
       rebuild(o, l, r);
     },
     setReserve(reserve: boolean) {
-      const next = reserve ? RESERVE : MAIN;
+      const next = reserve ? RESERVE : colors;
       if (next === palette) return;
       palette = next;
       colorsDirty = true;
