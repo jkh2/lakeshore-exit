@@ -193,7 +193,7 @@ export function LakeshoreExit() {
             <div
               role="alert"
               className={clsx(
-                "absolute top-14 left-1/2 w-[min(40rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-md px-4 py-3 text-center font-display text-3xl font-semibold tracking-wide text-ink md:top-6 md:text-5xl",
+                "absolute top-14 left-1/2 w-[min(40rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-md px-4 py-3 text-center font-display text-3xl font-semibold tracking-wide text-ink desk:top-6 desk:text-5xl",
                 bannerLevel >= 2 ? "warning-fast bg-signal" : "warning-live bg-amber",
               )}
             >
@@ -220,13 +220,22 @@ export function LakeshoreExit() {
             <div ref={poseRef} className="mt-1 font-display text-lg tracking-widest text-amber" />
           </div>
 
-          <div className="absolute bottom-28 left-4 flex items-end gap-3 md:bottom-8">
-            <canvas ref={tapeRef} width={168} height={560} className="h-52 w-16 rounded-sm md:h-72 md:w-20" />
+          {/* On touch screens the tape sits above the stick, or beside it when the screen is short. */}
+          <div className="absolute bottom-36 left-4 flex items-end gap-3 short:bottom-4 short:left-36 desk:bottom-8">
+            <canvas
+              ref={tapeRef}
+              width={168}
+              height={560}
+              className="h-52 w-16 rounded-sm short:h-36 short:w-12 desk:h-72 desk:w-20"
+            />
             <div>
-              <div ref={altRef} className="font-display text-5xl leading-none tabular-nums md:text-7xl" />
+              <div
+                ref={altRef}
+                className="font-display text-5xl leading-none tabular-nums short:text-4xl desk:text-7xl"
+              />
               <div className="mt-1 font-display text-sm tracking-widest text-muted">FT AGL</div>
               {air ? (
-                <p className="mt-2 max-w-44 font-display text-sm leading-tight text-amber">
+                <p className="mt-2 max-w-44 font-display text-sm leading-tight text-amber short:hidden">
                   Critical pull {commas(DECISION_FT)}
                   <span className="mt-1 block text-signal">Hard deck {commas(HARD_DECK_FT)}</span>
                 </p>
@@ -235,14 +244,17 @@ export function LakeshoreExit() {
           </div>
 
           {prompt ? (
-            <div className="absolute bottom-36 left-1/2 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 text-center font-display text-xl tracking-wide text-fg md:bottom-10">
-              {prompt}
+            <div className="absolute top-32 left-1/2 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 text-center font-display text-lg tracking-wide text-fg desk:top-auto desk:bottom-10 desk:text-xl">
+              {/* Up top on touch screens it sits over bright sky, so it gets a backing. */}
+              <span className="rounded-md bg-panel/70 px-3 py-1 box-decoration-clone desk:bg-transparent desk:p-0">
+                {prompt}
+              </span>
             </div>
           ) : null}
 
           <div
             className={clsx(
-              "absolute bottom-36 left-1/2 -translate-x-1/2 items-center gap-2",
+              "absolute top-42 left-1/2 -translate-x-1/2 items-center gap-2 rounded-md bg-panel/70 py-1 pr-3 pl-1 desk:top-auto desk:bottom-36 desk:bg-transparent desk:p-0",
               air ? "flex" : "hidden",
             )}
           >
@@ -256,7 +268,7 @@ export function LakeshoreExit() {
             </div>
           </div>
 
-          <p className="absolute right-4 bottom-4 hidden max-w-xs text-right text-sm text-muted md:block">
+          <p className="absolute right-4 bottom-4 hidden max-w-xs text-right text-sm text-muted desk:block">
             {phase === "cabin"
               ? "WASD walk · mouse look · space jumps from the door"
               : phase === "freefall"
