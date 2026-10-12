@@ -13,7 +13,7 @@ The dev server listens on port 8080.
 
 ## Publish
 
-`npm run build:web` builds a static, installable copy of the game into `dist-web/` (relative paths, so it works under any subpath). Pushes to `main` deploy it to GitHub Pages through `.github/workflows/pages.yml`, which serves it at https://www.jameskeithharwood.com/lakeshore-exit/. Runtime asset URLs in game code should start with `import.meta.env.BASE_URL`.
+`npm run build:web` builds a static, installable copy of the game into `dist-web/` (relative paths, so it works under any subpath). The repo is private, so the site is published by copying `dist-web/` into the `lakeshore-exit/` folder of `jkh2/jkh2.github.io`, which serves it at https://www.jameskeithharwood.com/lakeshore-exit/. CI builds the same output on every push (`.github/workflows/build-web.yml`). Runtime asset URLs in game code should start with `import.meta.env.BASE_URL`.
 
 ## Jump
 
