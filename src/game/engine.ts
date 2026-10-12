@@ -1189,9 +1189,6 @@ export function mountGame(
 
   function step(dt: number, input: ReturnType<typeof sample> | null) {
     simTime += dt;
-    const a = path[seg] ?? path[0]!;
-    const b = path[seg + 1] ?? path[0]!;
-    const segLen = Math.max(0.001, a.distanceTo(b));
     let left = PLANE_MPS * dt;
     while (left > 0) {
       const aa = path[seg] ?? path[0]!;
@@ -1217,7 +1214,7 @@ export function mountGame(
     if (_v1.lengthSq() > 0) _v1.normalize();
     planeVel.copy(_v1).multiplyScalar(PLANE_MPS);
     const targetYaw = yawOf(_v1.x, _v1.z);
-    let dy = Math.atan2(Math.sin(targetYaw - planeYaw), Math.cos(targetYaw - planeYaw));
+    const dy = Math.atan2(Math.sin(targetYaw - planeYaw), Math.cos(targetYaw - planeYaw));
     planeYaw += dy * (1 - Math.exp(-3 * dt));
     planeBank += (clamp(-dy * 1.4, -0.35, 0.35) - planeBank) * (1 - Math.exp(-2 * dt));
     plane.rotation.order = "YXZ";
@@ -1368,7 +1365,7 @@ export function mountGame(
       const flareAmt = input.forward < -0.35 ? Math.min(1, -input.forward) : 0;
       brakeL += (Math.max(flareAmt, Math.max(0, input.turn) * 0.75) - brakeL) * ease;
       brakeR += (Math.max(flareAmt, Math.max(0, -input.turn) * 0.75) - brakeR) * ease;
-      let fspd = 10.5 - brake * 6.2 + drive * 3.8;
+      const fspd = 10.5 - brake * 6.2 + drive * 3.8;
       let desc = 5.4 - brake * 3.15 + drive * 0.85;
       if (brake && pos.y < 48) desc = Math.min(desc, 2.2);
       if (brake && pos.y < 14) desc = Math.min(desc, 1.3);
