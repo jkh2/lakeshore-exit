@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { createAudio } from "./audio";
 import {
   DECISION_FT,
@@ -135,6 +136,49 @@ function labelMat(text: string, fg: string, bg: string) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return new THREE.MeshBasicMaterial({ map: tex });
+}
+
+/** Edges from a to b: every `step` meters within `fine` of the drop zone, then each span half again longer. */
+function spans(a: number, b: number, step: number, fine: number) {
+  const out = [a];
+  let x = a;
+  while (x < b) {
+    x = Math.min(b, x + Math.max(step, (Math.abs(x) - fine) * 0.5));
+    out.push(x);
+  }
+  return out;
+}
+
+/**
+ * Flat ground over [x0, x1] by [z0, z1] at height y, with a PlaneGeometry's 0 to 1 UVs. It is cut
+ * into short pieces near the drop zone: a single quad kilometers long loses depth precision where
+ * the near plane clips it, and low over the beach the layers stacked on it start to fight.
+ */
+function groundGeo(x0: number, x1: number, z0: number, z1: number, y = 0) {
+  const xs = spans(x0, x1, 200, 6000);
+  const zs = spans(z0, z1, 200, 6000);
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  for (const z of zs) {
+    for (const x of xs) {
+      pos.push(x, y, z);
+      uv.push((x - x0) / (x1 - x0), (z1 - z) / (z1 - z0));
+    }
+  }
+  const nx = xs.length;
+  for (let j = 0; j < zs.length - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const a = j * nx + i;
+      idx.push(a, a + nx, a + 1, a + 1, a + nx, a + nx + 1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(pos.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  return geo;
 }
 
 function strut(
@@ -295,69 +339,47 @@ export function mountGame(
     return m;
   };
   const WORLD = 120000;
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(WORLD, WORLD * 2), waterFx.material);
-  water.rotation.x = -Math.PI / 2;
-  water.position.set(SHORE_X - 40 + WORLD / 2, 0, 0);
+  const water = new THREE.Mesh(groundGeo(SHORE_X - 40, SHORE_X - 40 + WORLD, -WORLD, WORLD), waterFx.material);
   water.frustumCulled = false;
   scene.add(water);
 
-  const farShape = new THREE.Shape();
-  farShape.moveTo(-WORLD, -WORLD);
-  farShape.lineTo(SHORE_X - 40, -WORLD);
-  farShape.lineTo(SHORE_X - 40, WORLD);
-  farShape.lineTo(-WORLD, WORLD);
-  farShape.closePath();
-  // Shape y becomes world -z once the mesh is laid flat.
-  const farHole = new THREE.Path();
-  farHole.moveTo(CITY.x0, -CITY.z1);
-  farHole.lineTo(CITY.x0, -CITY.z0);
-  farHole.lineTo(SHORE_X - 40, -CITY.z0);
-  farHole.lineTo(SHORE_X - 40, -CITY.z1);
-  farHole.closePath();
-  farShape.holes.push(farHole);
-  const farGeo = new THREE.ShapeGeometry(farShape);
+  // Beyond the near city: open country west, and the shore north and south of it.
+  const farGeo = mergeGeometries([
+    groundGeo(-WORLD, CITY.x0, -WORLD, WORLD),
+    groundGeo(CITY.x0, SHORE_X - 40, -WORLD, CITY.z0),
+    groundGeo(CITY.x0, SHORE_X - 40, CITY.z1, WORLD),
+  ]);
   const farUv = farGeo.getAttribute("uv");
   const farPos = farGeo.getAttribute("position");
-  for (let i = 0; i < farUv.count; i++) farUv.setXY(i, farPos.getX(i) / 1400, farPos.getY(i) / 1400);
+  for (let i = 0; i < farUv.count; i++) farUv.setXY(i, farPos.getX(i) / 1400, -farPos.getZ(i) / 1400);
   const farLand = new THREE.Mesh(
     farGeo,
     new THREE.MeshStandardMaterial({ map: farMap ?? undefined, color: "#c9cdc8", roughness: 1 }),
   );
-  farLand.rotation.x = -Math.PI / 2;
   farLand.frustumCulled = false;
   scene.add(farLand);
 
-  const land = new THREE.Mesh(new THREE.PlaneGeometry(cityW, cityD), cityMat);
-  land.rotation.x = -Math.PI / 2;
-  land.position.set((CITY.x0 + CITY.x1) / 2, 0, (CITY.z0 + CITY.z1) / 2);
+  const land = new THREE.Mesh(groundGeo(CITY.x0, CITY.x1, CITY.z0, CITY.z1), cityMat);
   land.frustumCulled = false;
   scene.add(land);
   if (sandMap) sandMap.repeat.set(18, 40 * (WORLD / 3100));
-  const sand = new THREE.Mesh(new THREE.PlaneGeometry(SHORE_X, WORLD * 2), onTop(sandMat, 1));
-  sand.rotation.x = -Math.PI / 2;
-  sand.position.set(SHORE_X / 2, 0.05, 0);
+  const sand = new THREE.Mesh(groundGeo(0, SHORE_X, -WORLD, WORLD, 0.05), onTop(sandMat, 1));
   sand.frustumCulled = false;
   scene.add(sand);
   if (roadMap) roadMap.repeat.set(1, 80 * (WORLD / 3100));
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(22, WORLD * 2), onTop(roadMat, 3));
+  const road = new THREE.Mesh(groundGeo(-29, -7, -WORLD, WORLD, 0.07), onTop(roadMat, 3));
   road.frustumCulled = false;
-  road.rotation.x = -Math.PI / 2;
-  road.position.set(-18, 0.07, 0);
   scene.add(road);
 
   const skyline = createSkyline(scene, { aniso, coarse, onTop });
 
-  const verge = new THREE.Mesh(new THREE.PlaneGeometry(40, WORLD * 2), onTop(grassMat.clone(), 2));
-  verge.rotation.x = -Math.PI / 2;
-  verge.position.set(10, 0.09, 0);
+  const verge = new THREE.Mesh(groundGeo(-10, 30, -WORLD, WORLD, 0.09), onTop(grassMat.clone(), 2));
   verge.frustumCulled = false;
   scene.add(verge);
   const wet = new THREE.Mesh(
-    new THREE.PlaneGeometry(18, WORLD * 2),
+    groundGeo(SHORE_X - 19, SHORE_X - 1, -WORLD, WORLD, 0.07),
     onTop(new THREE.MeshStandardMaterial({ color: "#b7a888", roughness: 0.95 }), 2),
   );
-  wet.rotation.x = -Math.PI / 2;
-  wet.position.set(SHORE_X - 10, 0.07, 0);
   wet.frustumCulled = false;
   scene.add(wet);
 

@@ -993,7 +993,11 @@ function ribbon(pts: readonly THREE.Vector2[], width: number, y: number, mat: TH
 }
 
 function flat(w: number, d: number, x: number, y: number, z: number, mat: THREE.Material) {
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
+  // Cut into pieces about 100 m across, so big lawns keep their depth precision up close.
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, d, Math.ceil(w / 100), Math.ceil(d / 100)),
+    mat,
+  );
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(x, y, z);
   return mesh;
