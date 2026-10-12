@@ -2,8 +2,8 @@ name: Build web
 
 # Builds the static web copy of the game (npm run build:web) and keeps it as a
 # downloadable artifact. The repo stays private, so the build is published by
-# copying dist-web/ into jkh2/jkh2.github.io under lakeshore-exit/, which
-# serves it at https://www.jameskeithharwood.com/lakeshore-exit/.
+# copying dist-web/ into jkh2/jkh2.github.io under games/lakeshore-exit/, which
+# serves it at https://www.jameskeithharwood.com/games/lakeshore-exit/.
 on:
   push:
     branches: [main]

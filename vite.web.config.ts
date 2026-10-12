@@ -6,7 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 
 // Static build of the game for GitHub Pages (`npm run build:web` → dist-web/).
 // `base: "./"` makes every asset URL relative, so the same output works at a
-// domain root or under a subpath like jameskeithharwood.com/lakeshore-exit/.
+// domain root or under a subpath like jameskeithharwood.com/games/lakeshore-exit/.
 // Runtime asset paths in game code should use `import.meta.env.BASE_URL`.
 export default defineConfig({
   root: "web",
