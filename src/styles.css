@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0e141b;
+  --color-panel: #141c26;
+  --color-fg: #e7eef4;
+  --color-muted: #8fa0b3;
+  --color-amber: #f0a202;
+  --color-signal: #e23d3d;
+  --color-line: #2a3848;
+  --color-go: #178a4b;
+  --font-sans: "Barlow", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Barlow Condensed", "Barlow", sans-serif;
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+    background: var(--color-ink);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 2px;
+  }
+
+  input[type="range"] {
+    accent-color: var(--color-amber);
+    width: 100%;
+    height: 2.75rem;
+  }
+}
+
+.visor {
+  background: radial-gradient(ellipse at center, transparent 58%, rgba(8, 12, 16, 0.55) 100%);
+}
+
+.warning-live {
+  animation: pulse-warn 0.85s ease-in-out infinite;
+}
+
+.warning-fast {
+  animation: pulse-warn 0.38s ease-in-out infinite;
+}
+
+@keyframes pulse-warn {
+  0%,
+  100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+
+.impact-black {
+  background: var(--color-ink);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.impact-black.is-on {
+  animation: impact-flash 520ms linear forwards;
+}
+
+@keyframes impact-flash {
+  0% {
+    background: #fff;
+    opacity: 1;
+  }
+  14% {
+    background: #fff;
+    opacity: 1;
+  }
+  36% {
+    background: var(--color-ink);
+    opacity: 1;
+  }
+  100% {
+    background: var(--color-ink);
+    opacity: 1;
+  }
+}
+
+.debrief-late {
+  animation: rise-in 420ms ease 1100ms both;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.touch-ui {
+  display: none;
+}
+
+@media (pointer: coarse), (max-width: 800px) {
+  .touch-ui {
+    display: flex;
+  }
+}
+
+.light-pill.is-green {
+  background: var(--color-go);
+  color: var(--color-ink);
+}
+
+.light-pill.is-red {
+  background: var(--color-signal);
+  color: var(--color-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .warning-live,
+  .warning-fast,
+  .debrief-late {
+    animation: none;
+  }
+
+  .impact-black.is-on {
+    animation: none;
+    opacity: 1;
+    background: var(--color-ink);
+  }
+}

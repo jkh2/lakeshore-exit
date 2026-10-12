@@ -1,0 +1,23 @@
+# Lakeshore Exit
+
+First-person skydiving over the Chicago lakefront. Ride a Twin Otter east of the beach, walk to the door, and exit over Lake Michigan. Pull when you want. If the main fails, cut away and throw the reserve before the hard deck, then fly the canopy back to the sand.
+
+## Run
+
+```bash
+npm install
+npm run dev
+```
+
+The dev server listens on port 8080.
+
+## Jump
+
+- Exit altitude 8,000–20,000 ft. Malfunction chance 0–40%.
+- Cabin: mouse look, WASD to walk. Space only jumps from the door.
+- Freefall: mouse is body attitude. A/D turn, W arches, S dives.
+- Canopy: A/D turn, W drives, S flares. Face the lake and land into the wind.
+- Audible altimeter and a full-screen banner at 4,500 ft. Pull-now at 3,000. Hard deck at 2,000.
+- A bad main is a streamer or a line twist. Cut away, then deploy the reserve. Too low and you go in.
+
+Best beach landing is saved in the browser.
