@@ -5,6 +5,7 @@ export function defaultSave(): Save {
   return {
     v: 1,
     bestM: null,
+    bestScore: null,
     jumps: 0,
     rides: 0,
     altitudeFt: DEFAULT_EXIT_FT,
@@ -22,6 +23,7 @@ export function loadSave(): Save {
     return {
       v: 1,
       bestM: typeof parsed.bestM === "number" ? parsed.bestM : null,
+      bestScore: typeof parsed.bestScore === "number" ? parsed.bestScore : null,
       jumps: typeof parsed.jumps === "number" ? parsed.jumps : 0,
       rides: typeof parsed.rides === "number" ? parsed.rides : 0,
       altitudeFt:

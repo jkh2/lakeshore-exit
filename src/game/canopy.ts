@@ -28,6 +28,9 @@ const RISER_X = 0.24;
 /** Eye height above the canopy group's origin. */
 export const CANOPY_EYE_Y = 0.62;
 
+/** The open wing's planform and its middle in canopy-group space, for its shadow. */
+export const WING = { span: SPAN, chord: CHORD, y: HEIGHT - ARC * 0.5, z: FORWARD } as const;
+
 /** Where a brake toggle sits for a given brake input, in canopy-group space. */
 export function togglePosition(out: THREE.Vector3, side: -1 | 1, brake: number) {
   return out.set(side * (RISER_X + 0.02 + brake * 0.04), RISER_TOP_Y - 0.22 - brake * 1.0, RISER_FRONT + 0.03 - brake * 0.28);

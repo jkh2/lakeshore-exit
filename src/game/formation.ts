@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { createBody, EYE_UP, type Body, type BodyLook, type BodyPose } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition, type Canopy } from "./canopy";
 import { DZ_X, DZ_Z, FT_PER_M, WIND_X, WIND_Z } from "./constants";
+import type { ShadowCaster } from "./shadow";
 
 // Two other jumpers leave the plane with the player, build a two-way base and leave a
 // slot open for the player to dock on. At break-off they turn, track away, open their
@@ -85,6 +86,8 @@ export type Formation = {
   playerGrips: (left: THREE.Vector3, right: THREE.Vector3) => void;
   /** Horizontal distance to the nearest jumper still above the player's canopy height band. */
   nearest: (p: THREE.Vector3) => number;
+  /** Adds each jumper in the sky or on the ground, for their shadows. */
+  casters: (out: ShadowCaster[]) => void;
   reset: () => void;
   dispose: () => void;
 };
@@ -470,6 +473,12 @@ export function createFormation(scene: THREE.Scene): Formation {
         best = Math.min(best, Math.hypot(j.pos.x - p.x, j.pos.z - p.z));
       }
       return best;
+    },
+    casters(out) {
+      if (!started) return;
+      for (const j of jumpers) {
+        if (j.body.group.visible) out.push({ feet: j.pos, wing: j.wing.group });
+      }
     },
     reset() {
       started = false;
