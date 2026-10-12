@@ -366,7 +366,7 @@ export function mountGame(
   const sandMat = new THREE.MeshStandardMaterial({ map: sandMap ?? undefined, color: "#e6d3aa", roughness: 1 });
   const grassMat = new THREE.MeshStandardMaterial({ color: "#3f7a4a", roughness: 1 });
   const roadMat = new THREE.MeshStandardMaterial({ map: roadMap ?? undefined, color: "#2c333a", roughness: 0.9 });
-  const normalTex = new THREE.TextureLoader().load("/textures/waternormals.jpg");
+  const normalTex = new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}textures/waternormals.jpg`);
   normalTex.anisotropy = aniso;
   const waterFx = createWaterMaterial(normalTex, atmo.haze, atmo.zenith, SHORE_X);
   const waterUniforms = waterFx.uniforms;

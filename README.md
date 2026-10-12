@@ -11,6 +11,10 @@ npm run dev
 
 The dev server listens on port 8080.
 
+## Publish
+
+`npm run build:web` builds a static, installable copy of the game into `dist-web/` (relative paths, so it works under any subpath). Pushes to `main` deploy it to GitHub Pages through `.github/workflows/pages.yml`, which serves it at https://www.jameskeithharwood.com/lakeshore-exit/. Runtime asset URLs in game code should start with `import.meta.env.BASE_URL`.
+
 ## Jump
 
 - Exit altitude 8,000–20,000 ft. Malfunction chance 0–40%.

@@ -1,0 +1,3 @@
+/* The web build's Vite root is web/, so point Tailwind at the game source too. */
+@import "../src/styles.css";
+@source "../src";
