@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* HUD layouts. `desk` is the exact opposite of .touch-ui below (no on-screen stick);
+   `short` is a touch layout on a short screen, such as a phone held sideways. */
+@custom-variant desk (@media (min-width: 801px) and (not (pointer: coarse)));
+@custom-variant short (@media (max-height: 500px) and ((pointer: coarse) or (max-width: 800px)));
+
 @theme {
   --color-ink: #0e141b;
   --color-panel: #141c26;
