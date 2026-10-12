@@ -16,7 +16,8 @@ import {
 } from "./constants";
 import { loadSave, writeSave } from "./save";
 import type { Bridge, Hud, Outcome, Phase } from "./types";
-import { createCanopy } from "./canopy";
+import { createBody, type BodyMode, type Gesture } from "./body";
+import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
 import { SUN_DIR, cityTexture, cloudTexture, createAtmosphere, createWaterMaterial } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
@@ -807,6 +808,10 @@ export function mountGame(
 
   const canopyRig = createCanopy();
   const canopy = canopyRig.group;
+  const body = createBody();
+  scene.add(body.group);
+  // Standing eye height; under canopy the harness hangs this far above the feet.
+  const EYE_UP = 1.6;
   canopy.visible = false;
   scene.add(canopy);
   const streamer = new THREE.Group();
@@ -851,6 +856,8 @@ export function mountGame(
   let lockedAlt = 12500 / FT_PER_M;
   let openT = 0;
   let shock = 0;
+  let gesture: Gesture | null = null;
+  let gestureStart = 0;
   let brakeL = 0;
   let brakeR = 0;
   let shockFired = false;
@@ -1062,6 +1069,8 @@ export function mountGame(
     phase = "deploying";
     openT = 0;
     shockFired = false;
+    gesture = "pull";
+    gestureStart = simTime;
     deployingReserve = false;
     mal = Math.random() < malChance ? (Math.random() < 0.62 ? "streamer" : "twist") : "none";
     heading = bodyYaw;
@@ -1079,6 +1088,8 @@ export function mountGame(
     canopy.visible = false;
     streamer.visible = false;
     vel.y = Math.min(vel.y, -30);
+    gesture = "cutaway";
+    gestureStart = simTime;
     pushLog(`Cut away at ${Math.round(pos.y * FT_PER_M).toLocaleString("en-US")} ft`);
     audio.fabric();
     flashText = "PULL RESERVE";
@@ -1100,6 +1111,8 @@ export function mountGame(
     usedReserve = true;
     openT = 0;
     shockFired = false;
+    gesture = "reserve";
+    gestureStart = simTime;
     heading = bodyYaw;
     pushLog(`Reserve at ${Math.round(alt).toLocaleString("en-US")} ft`);
     audio.fabric();
@@ -1424,6 +1437,7 @@ export function mountGame(
         brakeR = 0;
       }
       canopy.position.copy(pos);
+      canopy.position.y += EYE_UP - CANOPY_EYE_Y;
       canopy.rotation.set(0, heading, bank * 0.45);
       canopyRig.setReserve(flying === "reserve" || deployingReserve);
       canopyRig.update(u, brakeL, brakeR);
@@ -1614,7 +1628,7 @@ export function mountGame(
     }
     const air = Math.hypot(vel.x, vel.y, vel.z);
     camera.position.copy(pos);
-    camera.position.y += phase === "canopy" || phase === "down" ? 0.62 : 0.32;
+    camera.position.y += phase === "canopy" || phase === "down" ? EYE_UP : 0.32;
     if (!reduce && phase !== "down" && phase !== "impact") {
       const s = phase === "canopy" ? 0.012 : Math.min(air / 80, 1) * 0.045;
       camera.position.x += Math.sin(simTime * 23) * s;
@@ -1636,6 +1650,85 @@ export function mountGame(
       camera.fov += (targetFov - camera.fov) * 0.08;
       camera.updateProjectionMatrix();
     }
+  }
+
+  const bodyFrame = new THREE.Matrix4();
+  const bodyQ = new THREE.Quaternion();
+  const bodyE = new THREE.Euler();
+  const bodyInv = new THREE.Matrix4();
+  const one = new THREE.Vector3(1, 1, 1);
+  const handL = new THREE.Vector3();
+  const handR = new THREE.Vector3();
+  const bodyPose = {
+    mode: "hidden" as BodyMode,
+    forward: 0,
+    turn: 0,
+    leftHand: null as THREE.Vector3 | null,
+    rightHand: null as THREE.Vector3 | null,
+    gesture: null as Gesture | null,
+    gestureT: 0,
+    walk: 0,
+    flare: 0,
+    air: 0,
+    altFt: 0,
+    time: 0,
+    reaching: false,
+  };
+
+  function poseBody(dt: number) {
+    const p = bodyPose;
+    p.leftHand = null;
+    p.rightHand = null;
+    p.forward = lastInput?.forward ?? 0;
+    p.turn = lastInput?.turn ?? 0;
+    p.walk = walk;
+    p.time = simTime;
+    p.air = Math.hypot(vel.x, vel.y, vel.z);
+    p.altFt = (phase === "cabin" ? plane.position.y : Math.max(0, pos.y)) * FT_PER_M;
+    p.flare = clamp((30 - pos.y) / 25, 0, 1);
+    p.gestureT = simTime - gestureStart;
+    p.gesture = gesture && p.gestureT < 1.2 ? gesture : null;
+    p.reaching = phase === "deploying" || (phase === "malfunction" && mal === "twist");
+    if (phase === "menu" || phase === "impact") {
+      p.mode = "hidden";
+    } else if (phase === "cabin") {
+      p.mode = "cabin";
+      _v3.set(riderX, 1.5, riderZ);
+      plane.localToWorld(_v3);
+      bodyE.set(0, localYaw, 0, "YXZ");
+      bodyQ.setFromEuler(bodyE).premultiply(plane.quaternion);
+      bodyFrame.compose(_v3, bodyQ, one);
+      if (inDoor) {
+        // Grab the door bar either side of the body while it is within reach.
+        bodyInv.copy(bodyFrame).invert();
+        const zs = [clamp(riderZ - 0.32, 0.3, 1.6), clamp(riderZ + 0.32, 0.3, 1.6)];
+        const pts = zs.map((z) => plane.localToWorld(new THREE.Vector3(1.22, 1.05, z)).applyMatrix4(bodyInv));
+        const [a, b] = pts as [THREE.Vector3, THREE.Vector3];
+        const left = a.x < b.x ? a : b;
+        const right = a.x < b.x ? b : a;
+        if (left.z < 0.3 && right.z < 0.3 && left.length() < 0.85 && right.length() < 0.85) {
+          p.leftHand = handL.copy(left);
+          p.rightHand = handR.copy(right);
+        }
+      }
+    } else if (phase === "canopy" || phase === "down") {
+      p.mode = phase;
+      _v3.copy(pos);
+      _v3.y += EYE_UP;
+      bodyE.set(0, heading, phase === "canopy" ? bank * 0.45 : 0, "XYZ");
+      bodyQ.setFromEuler(bodyE);
+      bodyFrame.compose(_v3, bodyQ, one);
+      if (phase === "canopy") {
+        p.leftHand = togglePosition(handL, -1, brakeL);
+        p.rightHand = togglePosition(handR, 1, brakeR);
+        handL.y -= CANOPY_EYE_Y;
+        handR.y -= CANOPY_EYE_Y;
+      }
+    } else {
+      p.mode = "freefall";
+      bodyFrame.compose(camera.position, camera.quaternion, one);
+    }
+    body.update(bodyFrame, p, dt);
   }
 
   function audioMix() {
@@ -1676,6 +1769,7 @@ export function mountGame(
       guard++;
     }
     frameCamera(frameDt);
+    poseBody(frameDt);
     audioMix();
     publish(lastInput?.forward ?? 0);
     renderer.render(scene, camera);
@@ -1801,6 +1895,7 @@ export function mountGame(
     audio.dispose();
     atmo.dispose();
     canopyRig.dispose();
+    body.dispose();
     normalTex.dispose();
     if (window.__controlsTest === controlsTest) delete window.__controlsTest;
     const geos = new Set<THREE.BufferGeometry>();

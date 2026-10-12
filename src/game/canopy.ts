@@ -25,6 +25,14 @@ const RISER_FRONT = 0.07;
 const RISER_TOP_Y = 1.05;
 const RISER_X = 0.24;
 
+/** Eye height above the canopy group's origin. */
+export const CANOPY_EYE_Y = 0.62;
+
+/** Where a brake toggle sits for a given brake input, in canopy-group space. */
+export function togglePosition(out: THREE.Vector3, side: -1 | 1, brake: number) {
+  return out.set(side * (RISER_X + 0.02 + brake * 0.04), RISER_TOP_Y - 0.22 - brake * 1.0, RISER_FRONT + 0.03 - brake * 0.28);
+}
+
 function upper(c: number) {
   const t = THICK;
   return 5 * t * (0.2969 * Math.sqrt(c) - 0.126 * c - 0.3516 * c * c + 0.2843 * c ** 3 - 0.1036 * c ** 4);
@@ -271,10 +279,9 @@ export function createCanopy(): Canopy {
         seg(casc, riser);
       }
     }
-    const toggleY = (brake: number) => RISER_TOP_Y - 0.22 - brake * 0.75;
     for (const side of [-1, 1] as const) {
       const brake = side < 0 ? brakeL : brakeR;
-      const hand = new THREE.Vector3(side * (RISER_X + 0.02), toggleY(brake), RISER_FRONT + 0.03);
+      const hand = togglePosition(new THREE.Vector3(), side, brake);
       const toggle = toggles[side < 0 ? 0 : 1];
       if (toggle) toggle.position.copy(hand);
       riser.set(side * RISER_X, RISER_TOP_Y, RISER_FRONT + 0.02);
