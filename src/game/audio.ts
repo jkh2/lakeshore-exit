@@ -1,3 +1,9 @@
+// The cabin track: 136 BPM, four-bar phrases. The big hit at DROP starts the last section,
+// which loops for as long as you stay aboard; the file cuts off right on the next one.
+const TRACK_URL = `${import.meta.env.BASE_URL}audio/cabin.mp3`;
+const DROP = 22.69;
+const LOOP_END = DROP + (32 * 60) / 136.05;
+
 export function createAudio() {
   let ctx: AudioContext | null = null;
   let master: GainNode | null = null;
@@ -11,6 +17,15 @@ export function createAudio() {
   let propGain: GainNode | null = null;
   let muted = false;
   let yelled = false;
+  // Fetched as soon as the game loads, decoded once there is a context to decode it with.
+  const trackBytes: Promise<ArrayBuffer | null> =
+    typeof fetch === "function"
+      ? fetch(TRACK_URL)
+          .then((r) => (r.ok ? r.arrayBuffer() : null))
+          .catch(() => null)
+      : Promise.resolve(null);
+  let track: AudioBuffer | null = null;
+  let music: { src: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode } | null = null;
 
   function ensure() {
     if (ctx && master) return ctx;
@@ -22,6 +37,15 @@ export function createAudio() {
     master = ctx.createGain();
     master.gain.value = 0.7;
     master.connect(ctx.destination);
+    const c = ctx;
+    void trackBytes
+      .then((b) => (b ? c.decodeAudioData(b) : null))
+      .then((buf) => {
+        if (ctx === c) track = buf;
+      })
+      .catch(() => {
+        /* no music, the game plays on */
+      });
 
     const seconds = 2;
     const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
@@ -168,7 +192,8 @@ export function createAudio() {
       try {
         if (!ctx || !windGain || !engineGain || !windFilter) return;
         const w = muted ? 0 : wind;
-        const e = muted ? 0 : engine;
+        // The engine steps back a little while the music plays.
+        const e = muted ? 0 : music ? engine * 0.7 : engine;
         windGain.gain.setTargetAtTime(w, ctx.currentTime, 0.12);
         engineGain.gain.setTargetAtTime(e, ctx.currentTime, 0.15);
         windFilter.frequency.setTargetAtTime(
@@ -197,6 +222,44 @@ export function createAudio() {
         jetGain.gain.setTargetAtTime(muted ? 0 : jets * 0.5, ctx.currentTime, 0.25);
         jetFilter.frequency.setTargetAtTime(240 + jets * 2200, ctx.currentTime, 0.25);
         propGain.gain.setTargetAtTime(muted ? 0 : props * 0.16, ctx.currentTime, 0.3);
+      } catch {
+        /* ignore */
+      }
+    },
+    /**
+     * The cabin music, while `on`. `toGreen` is seconds to the green light, so the big hit
+     * lands on it; null (or too far out) joins the track at that hit. Off, it fades and
+     * closes down behind you, the plane flying on with it.
+     */
+    cabin(on: boolean, toGreen: number | null) {
+      try {
+        if (!ctx || !master) return;
+        const now = ctx.currentTime;
+        if (on && !music && track) {
+          const src = ctx.createBufferSource();
+          src.buffer = track;
+          src.loop = true;
+          src.loopStart = DROP;
+          src.loopEnd = Math.min(LOOP_END, track.duration);
+          const lp = ctx.createBiquadFilter();
+          lp.type = "lowpass";
+          lp.frequency.value = 18000;
+          const gain = ctx.createGain();
+          gain.gain.setValueAtTime(0, now);
+          gain.gain.setTargetAtTime(0.38, now, 0.12);
+          src.connect(lp);
+          lp.connect(gain);
+          gain.connect(master);
+          const near = toGreen !== null && toGreen >= 0 && toGreen < DROP;
+          src.start(now, near ? DROP - toGreen : DROP);
+          music = { src, gain, lp };
+        } else if (!on && music) {
+          music.gain.gain.cancelScheduledValues(now);
+          music.gain.gain.setTargetAtTime(0, now, 0.45);
+          music.lp.frequency.setTargetAtTime(380, now, 0.35);
+          music.src.stop(now + 3);
+          music = null;
+        }
       } catch {
         /* ignore */
       }
@@ -413,6 +476,8 @@ export function createAudio() {
       yelled = false;
     },
     dispose() {
+      music = null;
+      track = null;
       windGain = null;
       engineGain = null;
       rotorGain = null;

@@ -2,7 +2,7 @@
 
 ![Lakeshore Exit key art: a skydiver in freefall over the Chicago lakefront at sunset, with the drop plane, a helicopter, a hot-air balloon and an open canopy over the beach target](docs/key-art.jpg)
 
-<sub>Key art by James Keith Harwood.</sub>
+<sub>Key art by James Keith Harwood. The cabin music on the ride up (`public/audio/cabin.mp3`) was supplied by James Keith Harwood.</sub>
 
 First-person skydiving over the Chicago lakefront. Ride a Twin Otter east of the beach, walk to the door, and exit over Lake Michigan. Pull when you want. If the main fails, cut away and throw the reserve before the hard deck, then fly the canopy back to the sand.
 

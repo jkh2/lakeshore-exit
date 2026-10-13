@@ -3191,6 +3191,10 @@ export function mountGame(
     );
     const show = airshow.noise(camera.position);
     audio.traffic(live ? show.jets : 0, live ? show.props : 0);
+    // Music on the ride up, timed so its big hit lands on the green light.
+    const shortOfGreen =
+      Math.abs(plane.position.x - RUN_X) < 90 && planeVel.z > 0 && plane.position.z < DZ_Z - GREEN_HALF;
+    audio.cabin(phase === "cabin", shortOfGreen ? (DZ_Z - GREEN_HALF - plane.position.z) / PLANE_MPS : null);
     const air = Math.hypot(vel.x, vel.y, vel.z);
     if (phase === "impact") audio.update(0, 0, 0);
     else if (phase === "menu") audio.update(0.02, 0.045, 20);
