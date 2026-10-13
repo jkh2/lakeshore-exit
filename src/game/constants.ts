@@ -1,4 +1,4 @@
-import type { Light, PadId } from "./types";
+import type { Light, PadId, Ride } from "./types";
 
 export const FT_PER_M = 3.280839895;
 export const MPH_PER_MPS = 2.236936292;
@@ -9,6 +9,10 @@ export const HARD_DECK_FT = 2000;
 export const MIN_EXIT_FT = 8000;
 export const MAX_EXIT_FT = 20000;
 export const DEFAULT_EXIT_FT = 12500;
+/** The helicopter and the balloon go up lower than the plane. */
+export const HOP_MIN_FT = 5000;
+export const HOP_MAX_FT = 14000;
+export const DEFAULT_HOP_FT = 7500;
 export const DEFAULT_MAL_PCT = 15;
 
 export const DZ_X = 70;
@@ -31,6 +35,12 @@ export const LIGHTS = ["day", "golden", "dusk"] as const satisfies readonly Ligh
 
 export function isLight(v: unknown): v is Light {
   return typeof v === "string" && (LIGHTS as readonly string[]).includes(v);
+}
+
+export const RIDES = ["plane", "heli", "balloon", "roof"] as const satisfies readonly Ride[];
+
+export function isRide(v: unknown): v is Ride {
+  return typeof v === "string" && (RIDES as readonly string[]).includes(v);
 }
 
 /** BASE: the shortest drop worth jumping from a roof edge. */

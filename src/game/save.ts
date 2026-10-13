@@ -1,4 +1,4 @@
-import { DEFAULT_EXIT_FT, DEFAULT_MAL_PCT, SAVE_KEY, isLight, isPadId } from "./constants";
+import { DEFAULT_EXIT_FT, DEFAULT_HOP_FT, DEFAULT_MAL_PCT, SAVE_KEY, isLight, isPadId, isRide } from "./constants";
 import type { Save } from "./types";
 
 export function defaultSave(): Save {
@@ -9,6 +9,7 @@ export function defaultSave(): Save {
     jumps: 0,
     rides: 0,
     altitudeFt: DEFAULT_EXIT_FT,
+    hopFt: DEFAULT_HOP_FT,
     malPct: DEFAULT_MAL_PCT,
     light: "day",
     ride: "plane",
@@ -32,9 +33,10 @@ export function loadSave(): Save {
       rides: typeof parsed.rides === "number" ? parsed.rides : 0,
       altitudeFt:
         typeof parsed.altitudeFt === "number" ? parsed.altitudeFt : base.altitudeFt,
+      hopFt: typeof parsed.hopFt === "number" ? parsed.hopFt : base.hopFt,
       malPct: typeof parsed.malPct === "number" ? parsed.malPct : base.malPct,
       light: isLight(parsed.light) ? parsed.light : base.light,
-      ride: parsed.ride === "roof" ? "roof" : "plane",
+      ride: isRide(parsed.ride) ? parsed.ride : base.ride,
       roof: isPadId(parsed.roof) ? parsed.roof : base.roof,
       suit: parsed.suit === "wing" ? "wing" : "rig",
     };

@@ -1,8 +1,8 @@
 /** Time of day. */
 export type Light = "day" | "golden" | "dusk";
 
-/** How you get up there: the Twin Otter, or the stairs to a marked rooftop. */
-export type Ride = "plane" | "roof";
+/** How you get up there: the Twin Otter, a helicopter, a hot-air balloon, or the stairs to a marked rooftop. */
+export type Ride = "plane" | "heli" | "balloon" | "roof";
 export type PadId = "southloop" | "aqua" | "aon" | "willis";
 /** A skydive from the plane, or a BASE jump off a roof. */
 export type JumpMode = "skydive" | "base";
@@ -14,6 +14,7 @@ export type Area = "beach" | "park" | "street" | "roof" | "water" | "none";
 export type Phase =
   | "menu"
   | "cabin"
+  | "aboard"
   | "roof"
   | "freefall"
   | "deploying"
@@ -37,7 +38,10 @@ export type JumpScore = {
 export type Outcome = {
   kind: "landed" | "water" | "impact";
   mode: JumpMode;
+  ride: Ride;
   suit: Suit;
+  /** Off a helicopter or a balloon: seconds from the exit until the body was stable, if it got there. */
+  stableS: number | null;
   /** Wingsuit: meters flown over the ground from the exit to the pull. */
   flightM: number | null;
   /** Wingsuit: distance over height lost once the suit was flying, up to the pull. */
@@ -73,6 +77,8 @@ export type Save = {
   jumps: number;
   rides: number;
   altitudeFt: number;
+  /** Exit altitude for the helicopter and the balloon. */
+  hopFt: number;
   malPct: number;
   light: Light;
   ride: Ride;
@@ -84,6 +90,7 @@ export type Bridge = {
   /** Time of day; read once when the game mounts. */
   light: Light;
   altitudeFt: number;
+  hopFt: number;
   malChance: number;
   ride: Ride;
   roof: PadId;
@@ -140,6 +147,7 @@ export function createBridge(): Bridge {
   return {
     light: "day",
     altitudeFt: 12500,
+    hopFt: 7500,
     malChance: 0.15,
     ride: "plane",
     roof: "southloop",

@@ -8,13 +8,17 @@ import {
   BASE_PULL_FT,
   DECISION_FT,
   DEFAULT_EXIT_FT,
+  DEFAULT_HOP_FT,
   FT_PER_M,
   DEFAULT_MAL_PCT,
   HARD_DECK_FT,
+  HOP_MAX_FT,
+  HOP_MIN_FT,
   LIGHTS,
   MAX_EXIT_FT,
   MIN_EXIT_FT,
   PADS,
+  RIDES,
 } from "@/game/constants";
 import {
   createBridge,
@@ -31,6 +35,12 @@ import {
 } from "@/game/types";
 
 const LIGHT_LABEL: Record<Light, string> = { day: "Midday", golden: "Golden hour", dusk: "Dusk" };
+const RIDE_LABEL: Record<Ride, string> = {
+  plane: "The plane",
+  heli: "Helicopter",
+  balloon: "Balloon",
+  roof: "A rooftop",
+};
 
 function commas(n: number) {
   return Math.round(n).toLocaleString("en-US");
@@ -82,6 +92,7 @@ export function LakeshoreExit() {
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [canopy, setCanopy] = useState<"none" | "main" | "reserve">("none");
   const [altitudeFt, setAltitudeFt] = useState(DEFAULT_EXIT_FT);
+  const [hopFt, setHopFt] = useState(DEFAULT_HOP_FT);
   const [malPct, setMalPct] = useState(DEFAULT_MAL_PCT);
   const [muted, setMuted] = useState(false);
   const [light, setLight] = useState<Light | null>(null);
@@ -178,12 +189,15 @@ export function LakeshoreExit() {
     const saved = loadSave();
     const alt = Math.min(MAX_EXIT_FT, Math.max(MIN_EXIT_FT, saved.altitudeFt));
     const mal = Math.min(40, Math.max(0, saved.malPct));
+    const hop = Math.min(HOP_MAX_FT, Math.max(HOP_MIN_FT, saved.hopFt));
     bridgeRef.current.altitudeFt = alt;
+    bridgeRef.current.hopFt = hop;
     bridgeRef.current.malChance = mal / 100;
     bridgeRef.current.ride = saved.ride;
     bridgeRef.current.roof = saved.roof;
     bridgeRef.current.suit = saved.suit;
     setAltitudeFt(alt);
+    setHopFt(hop);
     setMalPct(mal);
     setRide(saved.ride);
     setRoof(saved.roof);
@@ -238,6 +252,8 @@ export function LakeshoreExit() {
     writeSave({ ...loadSave(), ride: r, roof: pad });
   };
   const fromRoof = ride === "roof";
+  /** A helicopter or a balloon: a slow ride up, then dead air. */
+  const hop = ride === "heli" || ride === "balloon";
   const chooseSuit = (next: Suit) => {
     bridge.suit = next;
     setSuit(next);
@@ -305,7 +321,11 @@ export function LakeshoreExit() {
                   ? "MAIN"
                   : phase === "cabin"
                     ? "CABIN"
-                    : phase === "roof"
+                    : phase === "aboard"
+                      ? ride === "heli"
+                        ? "HELICOPTER"
+                        : "BALLOON"
+                      : phase === "roof"
                       ? "ROOF"
                       : base
                         ? "BASE"
@@ -334,7 +354,7 @@ export function LakeshoreExit() {
                 className="font-display text-5xl leading-none tabular-nums short:text-4xl desk:text-7xl"
               />
               <div className="mt-1 font-display text-sm tracking-widest text-muted">FT AGL</div>
-              {air || phase === "roof" ? (
+              {air || phase === "roof" || phase === "aboard" ? (
                 <p className="mt-2 max-w-44 font-display text-sm leading-tight text-amber short:hidden">
                   {base ? `Pull by ${commas(BASE_PULL_FT)}` : `Critical pull ${commas(DECISION_FT)}`}
                   <span className="mt-1 block text-signal">
@@ -357,7 +377,7 @@ export function LakeshoreExit() {
           <div
             className={clsx(
               "absolute top-42 left-1/2 -translate-x-1/2 items-center gap-2 rounded-md bg-panel/70 py-1 pr-3 pl-1 desk:top-auto desk:bottom-36 desk:bg-transparent desk:p-0",
-              air || phase === "roof" ? "flex" : "hidden",
+              air || phase === "roof" || phase === "aboard" ? "flex" : "hidden",
             )}
           >
             <div ref={dzArrowRef} className="grid size-8 place-items-center text-amber">
@@ -373,6 +393,10 @@ export function LakeshoreExit() {
           <p className="absolute right-4 bottom-4 hidden max-w-xs text-right text-sm text-muted desk:block">
             {phase === "cabin"
               ? "WASD walk · mouse look · run out the door on green"
+              : phase === "aboard"
+                ? ride === "heli"
+                  ? "Mouse look · space pushes off once the pilot clears you"
+                  : "WASD steps around the basket · mouse look · space climbs over the rim"
               : phase === "roof"
                 ? "WASD walk · shift runs · step off an edge, or space to run and jump"
                 : phase === "freefall"
@@ -380,7 +404,9 @@ export function LakeshoreExit() {
                   ? "A/D bank · W dive · S flare · mouse looks · space pulls"
                   : base
                     ? "A/D turn · W arch · S dive · space pulls · count your delay"
-                    : "A/D turn · W arch · S dive · space pulls"
+                    : hop
+                      ? "Hold W to arch until stable · A/D turn · S dive · space pulls"
+                      : "A/D turn · W arch · S dive · space pulls"
                 : phase === "malfunction"
                   ? "X cut away · R reserve"
                   : phase === "canopy"
@@ -403,7 +429,7 @@ export function LakeshoreExit() {
             />
           </div>
           <div className="touch-ui pointer-events-auto absolute right-4 bottom-4 flex flex-col gap-2">
-            {phase === "cabin" || phase === "roof" ? (
+            {phase === "cabin" || phase === "roof" || phase === "aboard" ? (
               <TouchButton label="JUMP" onDown={jumpPulse.down} onUp={jumpPulse.up} />
             ) : null}
             {phase === "freefall" ? (
@@ -450,40 +476,18 @@ export function LakeshoreExit() {
         <aside className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 max-h-[86dvh] overflow-y-auto p-3 md:inset-y-0 md:left-0 md:w-[26rem] md:max-h-none md:p-6">
           <div className="rounded-2xl border border-line bg-panel/90 p-5 backdrop-blur-md">
             <div className="flex items-center gap-2 text-amber">
-              {winged ? (
-                <Bird className="size-5" aria-hidden="true" />
-              ) : fromRoof ? (
-                <Building2 className="size-5" aria-hidden="true" />
-              ) : (
-                <Plane className="size-5" aria-hidden="true" />
-              )}
-              <p className="font-display text-sm tracking-[0.22em]">
-                {winged
-                  ? fromRoof
-                    ? "WINGSUIT BASE · CHICAGO"
-                    : "WINGSUIT · TWIN OTTER"
-                  : fromRoof
-                    ? "ROOFTOP BASE · CHICAGO"
-                    : "TWIN OTTER · CHICAGO"}
-              </p>
+              {winged ? <Bird className="size-5" aria-hidden="true" /> : <RideIcon ride={ride} className="size-5" />}
+              <p className="font-display text-sm tracking-[0.22em]">{EYEBROW[ride][winged ? 1 : 0]}</p>
             </div>
             <h1 className="mt-2 font-display text-5xl leading-none font-semibold tracking-wide">Lakeshore Exit</h1>
-            <p className="mt-3 text-sm leading-relaxed text-muted">
-              {winged
-                ? fromRoof
-                  ? "Fly a wingsuit off a Chicago tower. The suit fills in a couple of seconds, then you get a short flight past the skyline before the pull. Willis Tower gives the longest."
-                  : "Leave the Twin Otter in a wingsuit and fly the lakefront. The suit goes two and a half feet forward for every foot down, so go see the city."
-                : fromRoof
-                  ? "Stand on top of a Chicago tower, walk to the edge and jump. You get seconds, not minutes, before the pull."
-                  : "Look around the cabin, walk to the door, and leave over Lake Michigan. The beach is west. The breeze is off the lake."}
-            </p>
+            <p className="mt-3 text-sm leading-relaxed text-muted">{BLURB[ride][winged ? 1 : 0]}</p>
 
             <div className="mt-4" role="radiogroup" aria-labelledby="ride-label">
               <span id="ride-label" className="block font-display text-lg tracking-wide">
                 Jump from
               </span>
               <div className="mt-1.5 grid grid-cols-2 gap-2">
-                {(["plane", "roof"] as const).map((r) => (
+                {RIDES.map((r) => (
                   <button
                     key={r}
                     type="button"
@@ -495,12 +499,8 @@ export function LakeshoreExit() {
                     )}
                     onClick={() => choose(r, roof)}
                   >
-                    {r === "plane" ? (
-                      <Plane className="size-4" aria-hidden="true" />
-                    ) : (
-                      <Building2 className="size-4" aria-hidden="true" />
-                    )}
-                    {r === "plane" ? "The plane" : "A rooftop"}
+                    <RideIcon ride={r} className="size-4" />
+                    {RIDE_LABEL[r]}
                   </button>
                 ))}
               </div>
@@ -556,23 +556,32 @@ export function LakeshoreExit() {
             <label className="mt-5 block" htmlFor="exit-alt">
               <span className="flex items-baseline justify-between font-display text-lg tracking-wide">
                 Exit altitude
-                <span className="tabular-nums text-amber">{commas(altitudeFt)} ft</span>
+                <span className="tabular-nums text-amber">{commas(hop ? hopFt : altitudeFt)} ft</span>
               </span>
               <input
                 id="exit-alt"
                 type="range"
-                min={MIN_EXIT_FT}
-                max={MAX_EXIT_FT}
+                min={hop ? HOP_MIN_FT : MIN_EXIT_FT}
+                max={hop ? HOP_MAX_FT : MAX_EXIT_FT}
                 step={500}
-                value={altitudeFt}
+                value={hop ? hopFt : altitudeFt}
                 suppressHydrationWarning
                 onChange={(e) => {
                   const v = Number(e.target.value);
-                  bridge.altitudeFt = v;
-                  setAltitudeFt(v);
+                  if (hop) {
+                    bridge.hopFt = v;
+                    setHopFt(v);
+                  } else {
+                    bridge.altitudeFt = v;
+                    setAltitudeFt(v);
+                  }
                 }}
               />
-              <span className="text-xs text-muted">8,000 to 20,000 ft above the lake</span>
+              <span className="text-xs text-muted">
+                {hop
+                  ? `${commas(HOP_MIN_FT)} to ${commas(HOP_MAX_FT)} ft above the lake`
+                  : `${commas(MIN_EXIT_FT)} to ${commas(MAX_EXIT_FT)} ft above the lake`}
+              </span>
             </label>
 
             <label className="mt-4 block" htmlFor="mal-chance">
@@ -640,6 +649,7 @@ export function LakeshoreExit() {
                   <>
                     <p className="font-display text-lg tracking-wide text-amber">Critical altitude {commas(DECISION_FT)} ft</p>
                     <p className="mt-1 text-muted">
+                      {hop ? "Dead air first: arch until you are stable. " : ""}
                       The altimeter yells if you pass it still in freefall. Pull there. Hard deck {commas(HARD_DECK_FT)} ft.
                     </p>
                   </>
@@ -654,7 +664,7 @@ export function LakeshoreExit() {
                 bridge.command = "start";
               }}
             >
-              {fromRoof ? "Go to the roof" : "Start the jump"}
+              {START[ride]}
             </button>
             {bootError ? <p className="mt-3 text-sm text-signal">{bootError}</p> : null}
             {record.jumps > 0 ? (
@@ -678,6 +688,23 @@ export function LakeshoreExit() {
                     <li>Freefall: you start from a standstill, so speed builds slowly. Space pulls.</li>
                   )}
                   <li>Canopy: it opens in about a second. Fly the arrow to open ground and land facing the lake.</li>
+                </>
+              ) : hop ? (
+                <>
+                  <li>
+                    {ride === "heli"
+                      ? "Helicopter: look around. Once the pilot clears you, press space (or W) to push off the skid."
+                      : "Balloon: WASD steps around the basket. Face out and press space to climb over the rim."}
+                  </li>
+                  {winged ? (
+                    <li>
+                      Wingsuit: with no airspeed to start, the suit has to dive before it flies. A and D bank, W dives, S
+                      flares. Space pulls.
+                    </li>
+                  ) : (
+                    <li>Dead air: hold W to arch until you are stable, then A and D turn, S dives, space pulls.</li>
+                  )}
+                  <li>Canopy: A and D turn, S flares. Land facing the lake, into the wind.</li>
                 </>
               ) : (
                 <>
@@ -762,6 +789,78 @@ export function LakeshoreExit() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+/** The menu's eyebrow for each ride: standard rig, then wingsuit. */
+const EYEBROW: Record<Ride, [string, string]> = {
+  plane: ["TWIN OTTER · CHICAGO", "WINGSUIT · TWIN OTTER"],
+  heli: ["HELICOPTER · CHICAGO", "WINGSUIT · HELICOPTER"],
+  balloon: ["HOT-AIR BALLOON · CHICAGO", "WINGSUIT · BALLOON"],
+  roof: ["ROOFTOP BASE · CHICAGO", "WINGSUIT BASE · CHICAGO"],
+};
+
+const BLURB: Record<Ride, [string, string]> = {
+  plane: [
+    "Look around the cabin, walk to the door, and leave over Lake Michigan. The beach is west. The breeze is off the lake.",
+    "Leave the Twin Otter in a wingsuit and fly the lakefront. The suit goes two and a half feet forward for every foot down, so go see the city.",
+  ],
+  heli: [
+    "Sit in the open door of a helicopter hovering off the beach, then push off into dead air. There is no wind to fly on at first: arch hard and ride out the tumble.",
+    "Push off a hovering helicopter in a wingsuit. With no airspeed to start, let the suit dive until it bites, then fly the lakefront.",
+  ],
+  balloon: [
+    "Drift in over the lake under a balloon in the city's colors, then climb over the rim. The quietest exit there is, and the deadest air: arch hard until the wind catches you.",
+    "Step off a hot-air balloon in a wingsuit. Dive until the suit bites, then fly in over the beach past the other balloons.",
+  ],
+  roof: [
+    "Stand on top of a Chicago tower, walk to the edge and jump. You get seconds, not minutes, before the pull.",
+    "Fly a wingsuit off a Chicago tower. The suit fills in a couple of seconds, then you get a short flight past the skyline before the pull. Willis Tower gives the longest.",
+  ],
+};
+
+const START: Record<Ride, string> = {
+  plane: "Start the jump",
+  heli: "Board the helicopter",
+  balloon: "Board the balloon",
+  roof: "Go to the roof",
+};
+
+/** Lucide has a plane and a building; the helicopter and the balloon are drawn to match them. */
+function RideIcon({ ride, className }: { ride: Ride; className: string }) {
+  if (ride === "plane") return <Plane className={className} aria-hidden="true" />;
+  if (ride === "roof") return <Building2 className={className} aria-hidden="true" />;
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {ride === "heli" ? (
+        <>
+          <path d="M3 4h16" />
+          <path d="M11 4v5" />
+          <path d="M7 9h6a3 3 0 0 1 0 6H7a3 3 0 0 1 0-6z" />
+          <path d="M16 12h5" />
+          <path d="M21 10v4" />
+          <path d="M5 20h11" />
+          <path d="M8 15v5" />
+          <path d="M13 15v5" />
+        </>
+      ) : (
+        <>
+          <path d="M12 2a6 6 0 0 0-6 6c0 3.5 3.5 6.5 4.5 8h3c1-1.5 4.5-4.5 4.5-8a6 6 0 0 0-6-6z" />
+          <path d="M10.5 16l.5 3" />
+          <path d="M13.5 16l-.5 3" />
+          <rect x="10" y="19" width="4" height="3" rx="0.5" />
+        </>
+      )}
+    </svg>
   );
 }
 
