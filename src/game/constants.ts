@@ -1,3 +1,5 @@
+import type { Light } from "./types";
+
 export const FT_PER_M = 3.280839895;
 export const MPH_PER_MPS = 2.236936292;
 
@@ -20,3 +22,9 @@ export const WIND_Z = 0.35;
 export const PLANE_MPS = 46;
 
 export const SAVE_KEY = "lakeshore-exit-v1";
+
+export const LIGHTS = ["day", "golden", "dusk"] as const satisfies readonly Light[];
+
+export function isLight(v: unknown): v is Light {
+  return typeof v === "string" && (LIGHTS as readonly string[]).includes(v);
+}

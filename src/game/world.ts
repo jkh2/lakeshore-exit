@@ -1,20 +1,160 @@
 import * as THREE from "three";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
+import type { Light } from "./types";
 
-export const SUN_DIR = new THREE.Vector3(-0.62, 0.5, 0.3).normalize();
+type Rgb = readonly [number, number, number];
 
-const SKY = {
-  turbidity: 3.2,
-  rayleigh: 1.25,
-  mieCoefficient: 0.0035,
-  mieDirectionalG: 0.82,
-  gain: 0.36,
+export type LightPreset = {
+  /** Toward the sun. */
+  sun: THREE.Vector3;
+  sky: { turbidity: number; rayleigh: number; mieCoefficient: number; mieDirectionalG: number; gain: number };
+  /** Display-space haze shared by fog, the sky's horizon band, the lake and the clouds. */
+  haze: Rgb;
+  /** How much warmer the haze glows just above the horizon toward the sun. */
+  hazeSun: Rgb;
+  /** A grade on the sky model: a low sun turns its blues olive, so evenings pull green out. */
+  skyTint: Rgb;
+  sunColor: string;
+  sunIntensity: number;
+  hemiSky: string;
+  hemiGround: string;
+  hemiIntensity: number;
+  exposure: number;
+  env: number;
+  /** Sunlit and shaded sides of the cumulus. */
+  cloudLit: Rgb;
+  cloudShade: Rgb;
+  /** Inside a cloud. */
+  veil: Rgb;
+  /** The sun's glitter on the lake, and the surf along the beach. */
+  glint: Rgb;
+  foam: Rgb;
+  /** The lake's own color under the surface reflections. */
+  lake: number;
+  /** Lit office windows, and streetlights on the ground and along the Drive. */
+  windows: number;
+  streets: number;
 };
+
+/** A sun `elevation` degrees up, `azimuth` degrees clockwise from north (north is -z, east +x). */
+function sunAt(elevation: number, azimuth: number) {
+  const e = THREE.MathUtils.degToRad(elevation);
+  const a = THREE.MathUtils.degToRad(azimuth);
+  return new THREE.Vector3(Math.sin(a) * Math.cos(e), Math.sin(e), -Math.cos(a) * Math.cos(e));
+}
+
+// Summer evenings in Chicago: the sun goes down in the west-northwest, behind downtown as seen
+// from the lake.
+const PRESETS: Record<Light, LightPreset> = {
+  day: {
+    sun: new THREE.Vector3(-0.62, 0.5, 0.3).normalize(),
+    sky: { turbidity: 3.2, rayleigh: 1.25, mieCoefficient: 0.0035, mieDirectionalG: 0.82, gain: 0.36 },
+    haze: [0.8, 0.85, 0.9],
+    hazeSun: [1, 1, 1],
+    skyTint: [1, 1, 1],
+    sunColor: "#fff1dc",
+    sunIntensity: 2.6,
+    hemiSky: "#cfe0f0",
+    hemiGround: "#5d6650",
+    hemiIntensity: 0.35,
+    exposure: 1.08,
+    env: 0.85,
+    cloudLit: [1.1, 1.06, 1.0],
+    cloudShade: [0.42, 0.48, 0.58],
+    veil: [1, 1, 1],
+    glint: [9.0, 7.4, 5.6],
+    foam: [0.78, 0.8, 0.8],
+    lake: 1,
+    windows: 0.4,
+    streets: 0,
+  },
+  golden: {
+    sun: sunAt(7, 291),
+    sky: { turbidity: 3.6, rayleigh: 1.9, mieCoefficient: 0.004, mieDirectionalG: 0.8, gain: 0.5 },
+    haze: [0.86, 0.78, 0.72],
+    hazeSun: [1.14, 0.98, 0.8],
+    skyTint: [1, 0.94, 1.08],
+    sunColor: "#ffbe86",
+    sunIntensity: 2.3,
+    hemiSky: "#b9c3dc",
+    hemiGround: "#5a4c42",
+    hemiIntensity: 0.42,
+    exposure: 1.18,
+    env: 0.8,
+    cloudLit: [1.0, 0.76, 0.56],
+    cloudShade: [0.4, 0.4, 0.54],
+    veil: [1, 0.9, 0.82],
+    glint: [10.0, 6.4, 3.2],
+    foam: [0.74, 0.68, 0.62],
+    lake: 0.8,
+    windows: 0.7,
+    streets: 0,
+  },
+  dusk: {
+    sun: sunAt(1.2, 296),
+    sky: { turbidity: 2.4, rayleigh: 2.2, mieCoefficient: 0.004, mieDirectionalG: 0.78, gain: 1.1 },
+    haze: [0.6, 0.5, 0.56],
+    hazeSun: [1.3, 0.92, 0.62],
+    skyTint: [1, 0.82, 1.26],
+    sunColor: "#ff9a5c",
+    sunIntensity: 1.1,
+    hemiSky: "#8a93c0",
+    hemiGround: "#3b3440",
+    hemiIntensity: 0.6,
+    exposure: 1.3,
+    env: 0.9,
+    cloudLit: [0.92, 0.52, 0.44],
+    cloudShade: [0.26, 0.26, 0.4],
+    veil: [0.62, 0.53, 0.58],
+    glint: [8.0, 3.8, 1.6],
+    foam: [0.34, 0.31, 0.34],
+    lake: 0.5,
+    windows: 1.6,
+    streets: 0.6,
+  },
+};
+
+export const SUN_DIR = PRESETS.day.sun.clone();
+
+const SKY = { ...PRESETS.day.sky };
 
 // three.js applies fog after tone mapping, so the haze that ties ground, lake and
 // sky together is a display-space color shared by all three.
-export const HAZE_SRGB = new THREE.Vector3(0.8, 0.85, 0.9);
+export const HAZE_SRGB = new THREE.Vector3(...PRESETS.day.haze);
 export const HAZE_DISPLAY = new THREE.Color().setRGB(HAZE_SRGB.x, HAZE_SRGB.y, HAZE_SRGB.z, THREE.SRGBColorSpace);
+
+/** Tints for the time of day that shaders read when they are built. */
+export const TINT = {
+  hazeSun: new THREE.Vector3(...PRESETS.day.hazeSun),
+  skyTint: new THREE.Vector3(...PRESETS.day.skyTint),
+  cloudLit: new THREE.Vector3(...PRESETS.day.cloudLit),
+  cloudShade: new THREE.Vector3(...PRESETS.day.cloudShade),
+  veil: new THREE.Vector3(...PRESETS.day.veil),
+  glint: new THREE.Vector3(...PRESETS.day.glint),
+  foam: new THREE.Vector3(...PRESETS.day.foam),
+  lake: { value: PRESETS.day.lake },
+};
+
+/**
+ * Sets the sun, sky and haze for a time of day. Call it before building the world: the sky,
+ * fog, lake and clouds read these once, when they are made.
+ */
+export function applyLight(light: Light): LightPreset {
+  const p = PRESETS[light];
+  SUN_DIR.copy(p.sun);
+  Object.assign(SKY, p.sky);
+  HAZE_SRGB.set(...p.haze);
+  HAZE_DISPLAY.setRGB(HAZE_SRGB.x, HAZE_SRGB.y, HAZE_SRGB.z, THREE.SRGBColorSpace);
+  TINT.hazeSun.set(...p.hazeSun);
+  TINT.skyTint.set(...p.skyTint);
+  TINT.cloudLit.set(...p.cloudLit);
+  TINT.cloudShade.set(...p.cloudShade);
+  TINT.veil.set(...p.veil);
+  TINT.glint.set(...p.glint);
+  TINT.foam.set(...p.foam);
+  TINT.lake.value = p.lake;
+  return p;
+}
 
 export function rng(seed: number) {
   let a = seed;
@@ -100,22 +240,33 @@ export function createAtmosphere(renderer: THREE.WebGLRenderer): Atmosphere {
   // Low haze over a big lake reads slightly bluer and brighter than the raw model.
   hazeV.multiply(new THREE.Vector3(0.98, 1.0, 1.06));
   const zenV = skyRadiance(probe.set(0, 1, 0), SUN_DIR);
+  hazeV.multiply(TINT.skyTint);
+  zenV.multiply(TINT.skyTint);
   const haze = new THREE.Color().setRGB(hazeV.x, hazeV.y, hazeV.z);
   const zenith = new THREE.Color().setRGB(zenV.x, zenV.y, zenV.z);
 
   u.skyGain = { value: SKY.gain };
   u.hazeColor = { value: HAZE_SRGB.clone() };
+  u.hazeSun = { value: TINT.hazeSun.clone() };
+  u.skyTint = { value: TINT.skyTint.clone() };
   u.horizonY = { value: 0 };
   mat.fragmentShader =
-    "uniform float skyGain;\nuniform vec3 hazeColor;\nuniform float horizonY;\n" +
+    "uniform float skyGain;\nuniform vec3 skyTint;\nuniform vec3 hazeColor;\nuniform vec3 hazeSun;\nuniform float horizonY;\n" +
     mat.fragmentShader.replace(
       "gl_FragColor = vec4( texColor, 1.0 );",
-      `gl_FragColor = vec4( texColor * skyGain, 1.0 );`,
+      `gl_FragColor = vec4( texColor * skyGain * skyTint, 1.0 );`,
     ).replace(
       "#include <colorspace_fragment>",
       `#include <colorspace_fragment>
       float hz = 1.0 - smoothstep( horizonY - 0.004, horizonY + 0.12, direction.y );
-      gl_FragColor.rgb = mix( gl_FragColor.rgb, hazeColor, hz * hz * ( 3.0 - 2.0 * hz ) );`,
+      vec3 sunDir = vSunDirection;
+      // A low sun keeps its disc and glow instead of sinking into the haze band.
+      hz *= 1.0 - smoothstep( 0.93, 0.9995, dot( direction, sunDir ) );
+      vec2 flatDir = normalize( direction.xz + 1e-5 );
+      vec2 flatSun = normalize( sunDir.xz + 1e-5 );
+      float toward = pow( max( dot( flatDir, flatSun ), 0.0 ), 3.0 ) * smoothstep( horizonY, horizonY + 0.05, direction.y );
+      vec3 haze = hazeColor * mix( vec3( 1.0 ), hazeSun, toward );
+      gl_FragColor.rgb = mix( gl_FragColor.rgb, haze, hz * hz * ( 3.0 - 2.0 * hz ) );`,
     );
   mat.needsUpdate = true;
 
@@ -256,6 +407,49 @@ export function cityTexture(seed: number, size: number, blocks: number, aniso: n
   return tex;
 }
 
+/** Streetlights on cityTexture's street grid, for an emissive map: a sodium glow along each street, brighter at the lamps. */
+export function streetLights(blocks: number, aniso: number) {
+  const size = 512;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const g = c.getContext("2d");
+  if (!g) return null;
+  const rnd = rng(21);
+  const cell = size / blocks;
+  const street = cell * 0.13;
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, size, size);
+  g.fillStyle = "rgba(255,140,50,0.07)";
+  for (let i = 0; i <= blocks; i++) {
+    g.fillRect(i * cell - street / 2, 0, street, size);
+    g.fillRect(0, i * cell - street / 2, size, street);
+  }
+  for (let i = 0; i <= blocks; i++) {
+    for (let t = 0; t < size; t += cell / 5) {
+      for (const side of [-0.4, 0.4]) {
+        const a = i * cell + side * street;
+        for (const [x, y] of [
+          [a, t + rnd() * 3],
+          [t + rnd() * 3, a],
+        ] as const) {
+          if (rnd() < 0.3) continue;
+          g.fillStyle = rnd() > 0.2 ? "#ffb257" : "#fff1cf";
+          g.globalAlpha = 0.5 + rnd() * 0.5;
+          g.fillRect(x - 1, y - 1, 2, 2);
+        }
+      }
+    }
+  }
+  g.globalAlpha = 1;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = aniso;
+  return tex;
+}
+
 export function valueNoise(seed: number) {
   const perm = new Uint8Array(512);
   const r = rng(seed);
@@ -287,6 +481,9 @@ export function createWaterMaterial(normals: THREE.Texture, haze: THREE.Color, z
   const uniforms = {
     uTime: { value: 0 },
     uSun: { value: SUN_DIR.clone() },
+    uGlint: { value: TINT.glint.clone() },
+    uFoam: { value: TINT.foam.clone() },
+    uLake: { value: TINT.lake.value },
     uCam: { value: new THREE.Vector3() },
     uNormals: { value: normals },
     uHaze: { value: new THREE.Vector3(haze.r, haze.g, haze.b) },
@@ -306,7 +503,7 @@ export function createWaterMaterial(normals: THREE.Texture, haze: THREE.Color, z
         gl_Position = projectionMatrix * viewMatrix * wp;
       }`,
     fragmentShader: `varying vec3 vWorld;
-      uniform float uTime; uniform vec3 uSun; uniform vec3 uCam; uniform sampler2D uNormals;
+      uniform float uTime; uniform vec3 uSun; uniform vec3 uGlint; uniform vec3 uFoam; uniform float uLake; uniform vec3 uCam; uniform sampler2D uNormals;
       uniform vec3 uHaze; uniform vec3 uFogColor; uniform vec3 uZenith; uniform float uFogNear; uniform float uFogFar; uniform float uShore;
       vec3 nrm(vec2 p){ return texture2D(uNormals, p).rgb * 2.0 - 1.0; }
       void main(){
@@ -325,15 +522,15 @@ export function createWaterMaterial(normals: THREE.Texture, haze: THREE.Color, z
         float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, view), 0.0), 5.0);
         float deep = smoothstep(uShore + 10.0, uShore + 900.0, vWorld.x);
         vec3 body = mix(vec3(0.035, 0.20, 0.22), vec3(0.006, 0.03, 0.055), deep);
-        body *= 0.55 + 0.45 * max(uSun.y, 0.0);
+        body *= (0.55 + 0.45 * max(uSun.y, 0.0)) * uLake;
         vec3 col = mix(body, skyRefl, fres);
         float rs = max(dot(r, uSun), 0.0);
-        col += vec3(9.0, 7.4, 5.6) * pow(rs, 900.0);
-        col += vec3(0.16, 0.13, 0.10) * pow(rs, 28.0);
+        col += uGlint * pow(rs, 900.0);
+        col += uGlint * 0.0178 * pow(rs, 28.0);
         float shore = smoothstep(uShore + 55.0, uShore - 2.0, vWorld.x);
         float breakers = texture2D(uNormals, p / 14.0 + vec2(uTime * 0.03, 0.0)).r;
         float foam = shore * smoothstep(0.45, 0.8, breakers + shore * 0.35) * (1.0 - smoothstep(600.0, 2500.0, dist));
-        col = mix(col, vec3(0.78, 0.80, 0.80), foam * 0.8);
+        col = mix(col, uFoam, foam * 0.8);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>

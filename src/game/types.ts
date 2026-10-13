@@ -1,3 +1,6 @@
+/** Time of day. */
+export type Light = "day" | "golden" | "dusk";
+
 export type Phase =
   | "menu"
   | "cabin"
@@ -41,9 +44,12 @@ export type Save = {
   rides: number;
   altitudeFt: number;
   malPct: number;
+  light: Light;
 };
 
 export type Bridge = {
+  /** Time of day; read once when the game mounts. */
+  light: Light;
   altitudeFt: number;
   malChance: number;
   muted: boolean;
@@ -91,6 +97,7 @@ export type Hud = {
 
 export function createBridge(): Bridge {
   return {
+    light: "day",
     altitudeFt: 12500,
     malChance: 0.15,
     muted: false,
