@@ -4,6 +4,8 @@ export function createAudio() {
   let windGain: GainNode | null = null;
   let windFilter: BiquadFilterNode | null = null;
   let engineGain: GainNode | null = null;
+  let rotorGain: GainNode | null = null;
+  let burnerGain: GainNode | null = null;
   let muted = false;
   let yelled = false;
 
@@ -53,6 +55,47 @@ export function createAudio() {
     engineGain.connect(master);
     o1.start();
     o2.start();
+
+    // Helicopter: low rumble chopped by the blades, a sharp thump and a slower fall each pass.
+    const rotorSrc = ctx.createBufferSource();
+    rotorSrc.buffer = buf;
+    rotorSrc.loop = true;
+    const rotorLp = ctx.createBiquadFilter();
+    rotorLp.type = "lowpass";
+    rotorLp.frequency.value = 190;
+    rotorLp.Q.value = 0.9;
+    const chop = ctx.createGain();
+    chop.gain.value = 1;
+    const blades = ctx.createOscillator();
+    blades.type = "sawtooth";
+    blades.frequency.value = 10.8;
+    const depth = ctx.createGain();
+    depth.gain.value = -0.85;
+    blades.connect(depth);
+    depth.connect(chop.gain);
+    rotorGain = ctx.createGain();
+    rotorGain.gain.value = 0;
+    rotorSrc.connect(rotorLp);
+    rotorLp.connect(chop);
+    chop.connect(rotorGain);
+    rotorGain.connect(master);
+    rotorSrc.start(0, 0.5);
+    blades.start();
+
+    // Balloon burner: a broad roar of gas.
+    const burnSrc = ctx.createBufferSource();
+    burnSrc.buffer = buf;
+    burnSrc.loop = true;
+    const burnBp = ctx.createBiquadFilter();
+    burnBp.type = "bandpass";
+    burnBp.frequency.value = 340;
+    burnBp.Q.value = 0.45;
+    burnerGain = ctx.createGain();
+    burnerGain.gain.value = 0;
+    burnSrc.connect(burnBp);
+    burnBp.connect(burnerGain);
+    burnerGain.connect(master);
+    burnSrc.start(0, 1.1);
     return ctx;
   }
 
@@ -96,6 +139,16 @@ export function createAudio() {
           ctx.currentTime,
           0.2,
         );
+      } catch {
+        /* ignore */
+      }
+    },
+    /** The helicopter's rotor and the balloon's burner, each 0..1 by how close and how loud. */
+    vehicle(rotor: number, burner: number) {
+      try {
+        if (!ctx || !rotorGain || !burnerGain) return;
+        rotorGain.gain.setTargetAtTime(muted ? 0 : rotor * 0.9, ctx.currentTime, 0.2);
+        burnerGain.gain.setTargetAtTime(muted ? 0 : burner * 0.55, ctx.currentTime, 0.08);
       } catch {
         /* ignore */
       }
@@ -195,6 +248,8 @@ export function createAudio() {
         const now = c.currentTime;
         if (windGain) windGain.gain.setValueAtTime(0, now);
         if (engineGain) engineGain.gain.setValueAtTime(0, now);
+        if (rotorGain) rotorGain.gain.setValueAtTime(0, now);
+        if (burnerGain) burnerGain.gain.setValueAtTime(0, now);
 
         const o = c.createOscillator();
         const o2 = c.createOscillator();
@@ -276,6 +331,8 @@ export function createAudio() {
     dispose() {
       windGain = null;
       engineGain = null;
+      rotorGain = null;
+      burnerGain = null;
       master = null;
       if (ctx) void ctx.close();
       ctx = null;

@@ -43,9 +43,16 @@ export function describeOutcome(o: Outcome): { title: string; lede: string } {
   if (o.mode === "base") {
     if (o.from) bits.unshift(`BASE off ${o.from}`);
     if (o.delayS !== null) bits.push(`${o.delayS.toFixed(1)} s delay`);
-  } else bits.push(o.usedReserve ? "reserve ride" : "main");
+  } else {
+    if (o.ride === "heli" || o.ride === "balloon") {
+      bits.unshift(o.ride === "heli" ? "Off the helicopter" : "Out of the balloon");
+      if (o.stableS !== null) bits.push(`stable in ${o.stableS.toFixed(1)} s`);
+    }
+    bits.push(o.usedReserve ? "reserve ride" : "main");
+  }
   bits.push(o.intoWind ? "into the wind" : "downwind");
   if (o.hot) bits.push("hot");
-  if (o.redLight) bits.push("red-light exit");
+  if (o.redLight)
+    bits.push(o.ride === "heli" ? "went before the pilot cleared you" : "red-light exit");
   return { title, lede: bits.join(" · ") };
 }

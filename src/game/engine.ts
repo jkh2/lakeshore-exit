@@ -12,6 +12,8 @@ import {
   GREEN_HALF,
   GREEN_IN,
   HARD_DECK_FT,
+  HOP_MAX_FT,
+  HOP_MIN_FT,
   MPH_PER_MPS,
   PLANE_MPS,
   PULL_NOW_FT,
@@ -21,7 +23,7 @@ import {
   WIND_Z,
 } from "./constants";
 import { loadSave, writeSave } from "./save";
-import type { Bridge, Hud, JumpMode, Outcome, Phase, Suit } from "./types";
+import type { Bridge, Hud, JumpMode, Outcome, Phase, Ride, Suit } from "./types";
 import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
 import { dressCabin } from "./cabin";
@@ -34,6 +36,16 @@ import { createStreaks } from "./streaks";
 import { CITY, createSkyline } from "./skyline";
 import { createLife } from "./life";
 import { BODY_R, areaAt, canBaseFrom, createPads, lookAhead, nearestOpen, stepTo } from "./roofs";
+import {
+  BASKET,
+  HELI_EXIT,
+  HELI_SEAT,
+  HELI_SEAT_YAW,
+  RIM_Y,
+  createBalloon,
+  createHeli,
+  type BalloonTheme,
+} from "./rides";
 import type { Contact, Solid } from "./solids";
 import { createWing, flyWing, pathPitch, wingFill, type Wing } from "./wingsuit";
 import { SUN_DIR, applyLight, cityTexture, createAtmosphere, createWaterMaterial, streetLights } from "./world";
@@ -57,6 +69,8 @@ const STAND_EYE = 1.5;
 const BASE_OPEN_S = 1.25;
 /** Wingsuit: passing this close to a building counts as a close pass. */
 const PASS_M = 25;
+/** Seconds aboard the helicopter before the pilot has the hover settled and clears you. */
+const HELI_CLEAR_S = 4;
 
 /** Where the pull calls come, for the jump in progress. */
 const DECK = {
@@ -628,6 +642,26 @@ export function mountGame(
   plane.add(beacon);
   const cabin = dressCabin(plane, { inner, floor: floorM, seat: seatM, bar }, LOOKS);
 
+  // The helicopter and the balloon only fly when you ride them up.
+  const heli = createHeli();
+  heli.group.visible = false;
+  scene.add(heli.group);
+  const balloon = createBalloon("chicago", { pilot: true });
+  balloon.group.visible = false;
+  scene.add(balloon.group);
+  // Other balloons drifting in on the same breeze, for company.
+  const FLEET: [BalloonTheme, number, number, number][] = [
+    ["sunrise", -240, 35, -330],
+    ["ocean", 210, -60, -520],
+    ["rainbow", -120, 140, 260],
+  ];
+  const fleet = FLEET.map(([theme, dx, dy, dz], i) => {
+    const b = createBalloon(theme, { pilot: false });
+    b.group.visible = false;
+    scene.add(b.group);
+    return { b, off: new THREE.Vector3(dx, dy, dz), phase: 2.3 + i * 2.9, burn: 0 };
+  });
+
   const canopyRig = createCanopy();
   const canopy = canopyRig.group;
   const body = createBody();
@@ -746,6 +780,29 @@ export function mountGame(
   let proxAcc = 0;
   /** Where the eyes pointed at the exit, eased into the flight path as the suit fills. */
   let exitPitch = 0;
+  /** This jump's ride up, and off a helicopter or a balloon the dead air after the exit. */
+  let ride: Ride = "plane";
+  let deadAir = false;
+  /** Seconds since boarding the helicopter or balloon; when you left it; the pilot's go-ahead. */
+  let rideT = 0;
+  let leftAt = -1;
+  let cleared = false;
+  let hopAlt = 0;
+  const heliHome = new THREE.Vector3();
+  let heliOut = 0;
+  const balloonStart = new THREE.Vector3();
+  let balloonRise = 0;
+  /** The ride's velocity, its heading, and the balloon's burner from 0 to full. */
+  const rideVel = new THREE.Vector3();
+  let rideYaw = 0;
+  let burn = 0;
+  /** Dead air: pitch and roll on top of where you look, their rates, and when you got stable. */
+  let tumbleP = 0;
+  let tumbleR = 0;
+  let spinP = 0;
+  let spinR = 0;
+  let buffetAt = 0;
+  let stableS: number | null = null;
   const lzPos = new THREE.Vector3();
   const keys = new Set<string>();
   let qaKeys: Set<string> | null = null;
@@ -846,6 +903,12 @@ export function mountGame(
     passClear = 0;
     lookOffYaw = 0;
     lookOffPitch = 0;
+    deadAir = false;
+    tumbleP = 0;
+    tumbleR = 0;
+    spinP = 0;
+    spinR = 0;
+    stableS = null;
     audio.resetDeath();
     audio.resume();
   }
@@ -856,6 +919,12 @@ export function mountGame(
     save.roof = bridge.roof;
     save.suit = bridge.suit;
     suit = bridge.suit;
+    ride = bridge.ride;
+    if (ride === "heli" || ride === "balloon") {
+      board();
+      persist();
+      return;
+    }
     const pad = bridge.ride === "roof" ? (pads.list.find((p) => p.id === bridge.roof) ?? pads.list[0]) : null;
     if (pad) {
       // A few steps back from the edge you came to jump, looking over it.
@@ -883,6 +952,41 @@ export function mountGame(
     persist();
   }
 
+  /** Up in the helicopter or the balloon at the exit altitude, ready to go. */
+  function board() {
+    phase = "aboard";
+    mode = "skydive";
+    malChance = clamp(bridge.malChance, 0, 0.4);
+    save.malPct = Math.round(malChance * 100);
+    hopAlt = clamp(bridge.hopFt, HOP_MIN_FT, HOP_MAX_FT) / FT_PER_M;
+    save.hopFt = Math.round(hopAlt * FT_PER_M);
+    rideT = 0;
+    leftAt = -1;
+    burn = 0;
+    heliOut = 0;
+    balloonRise = 0;
+    cleared = ride === "balloon";
+    walk = 0;
+    if (ride === "heli") {
+      // Hovering off the beach, nose into the breeze: the open door looks up the shore at downtown.
+      heliHome.set(DZ_X + 330, hopAlt, DZ_Z - 120);
+      // Looking down past your boots at the city, 7,000 feet below.
+      localYaw = HELI_SEAT_YAW + 0.3;
+      localPitch = -0.7;
+    } else {
+      // Drifting in over the lake on the breeze, toward the beach and the city.
+      balloonStart.set(DZ_X + 520, hopAlt, DZ_Z - 160);
+      riderX = -0.3;
+      riderZ = 0.2;
+      // Facing downtown between the frame poles, with another balloon out ahead.
+      localYaw = 1.15;
+      localPitch = -0.2;
+    }
+    moveRides(0);
+    flashText = `${ride === "heli" ? "HELICOPTER" : "BALLOON"} · ${Math.round(hopAlt * FT_PER_M).toLocaleString("en-US")} FT`;
+    flashUntil = simTime + 3.5;
+  }
+
   /** Puts you on the roof at (x, z), facing `yaw`, to walk to an edge and jump. */
   function standOnRoof(x: number, z: number, yaw: number, name: string) {
     phase = "roof";
@@ -906,6 +1010,7 @@ export function mountGame(
     const { x, z } = pos;
     const yaw = heading;
     resetJump();
+    ride = "roof";
     standOnRoof(x, z, yaw, name);
     persist();
   }
@@ -965,6 +1070,8 @@ export function mountGame(
     const facts = {
       kind: "impact" as const,
       mode,
+      ride,
+      stableS,
       ...flightFacts(),
       area: "none" as const,
       roof: null,
@@ -1001,6 +1108,8 @@ export function mountGame(
     const facts = {
       kind: water ? ("water" as const) : ("landed" as const),
       mode,
+      ride,
+      stableS,
       ...flightFacts(),
       area,
       roof: roofLabel,
@@ -1181,9 +1290,9 @@ export function mountGame(
       wing = null;
     }
     heading = bodyYaw;
-    if (base) delayS = simTime - exitTime;
+    if (base || deadAir) delayS = simTime - exitTime;
     pushLog(
-      `Pull at ${Math.round(alt).toLocaleString("en-US")} ft${base ? ` · ${(delayS ?? 0).toFixed(1)} s delay` : ""}`,
+      `Pull at ${Math.round(alt).toLocaleString("en-US")} ft${base || deadAir ? ` · ${(delayS ?? 0).toFixed(1)} s delay` : ""}`,
     );
     audio.fabric();
     if (!base && alt < 700) pushLog("That pull is late");
@@ -1245,6 +1354,14 @@ export function mountGame(
 
   function forcePhase(p: string) {
     outcome = null;
+    ride = p.startsWith("roof") ? "roof" : "plane";
+    if (p === "heli" || p === "balloon") {
+      resetJump();
+      suit = bridge.suit;
+      ride = p;
+      board();
+      return;
+    }
     if (p.startsWith("roof")) {
       const pad = pads.list.find((q) => q.id === p.split(":")[1]) ?? pads.list[0];
       resetJump();
@@ -1431,14 +1548,17 @@ export function mountGame(
     life.update(simTime);
     pads.update(simTime);
     sock.rotation.y = Math.sin(simTime * 7) * 0.12;
+    moveRides(dt);
     (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity =
       Math.sin(simTime * 8) > 0.4 ? 2 : 0.15;
 
     if (!input) return;
     const sens = 0.00215;
-    if (phase === "cabin" || phase === "roof") {
+    if (phase === "cabin" || phase === "roof" || phase === "aboard") {
       localYaw -= lookDX * sens;
-      localPitch = clamp(localPitch - lookDY * sens, phase === "roof" ? -1.4 : -1.2, 1.05);
+      // Sitting in the helicopter's door, the head turns but the body stays facing out.
+      if (phase === "aboard" && ride === "heli") localYaw = clamp(localYaw, HELI_SEAT_YAW - 1.7, HELI_SEAT_YAW + 1.7);
+      localPitch = clamp(localPitch - lookDY * sens, phase === "cabin" ? -1.2 : -1.4, 1.05);
     } else if (phase === "canopy" || phase === "down") {
       lookOffYaw = clamp(lookOffYaw - lookDX * sens, -1.35, 1.35);
       lookOffPitch = clamp(lookOffPitch - lookDY * sens, -1.0, 1.5);
@@ -1498,6 +1618,11 @@ export function mountGame(
       return;
     }
 
+    if (phase === "aboard") {
+      rideAboard(dt, input);
+      return;
+    }
+
     formation.update(dt, simTime);
     if (phase === "down" || phase === "impact") return;
 
@@ -1513,7 +1638,7 @@ export function mountGame(
 
     if (phase === "freefall" && wing) {
       flyTheSuit(dt, input);
-    } else if (phase === "freefall" && mode === "base") {
+    } else if (phase === "freefall" && (mode === "base" || deadAir)) {
       baseFall(dt, input.turn, arch, dive);
     } else if (phase === "freefall" || (phase === "malfunction" && mal === "streamer") || (phase === "deploying" && mal === "streamer")) {
       bodyYaw += input.turn * 1.25 * dt;
@@ -1593,6 +1718,7 @@ export function mountGame(
       vel.lerp(_v1, 1 - Math.exp(-2.5 * dt));
     }
 
+    if (deadAir) steady(dt, arch);
     if (phase === "freefall") dock(dt, input);
     else if (docked) {
       docked = false;
@@ -1764,6 +1890,174 @@ export function mountGame(
     persist();
   }
 
+  /** Flies the helicopter and the balloons: hovering or drifting, and once you are gone, away. */
+  function moveRides(dt: number) {
+    const riding = phase !== "menu" && (ride === "heli" || ride === "balloon");
+    if (riding) rideT += dt;
+    const gone = leftAt < 0 ? 0 : simTime - leftAt;
+    heli.group.visible = riding && ride === "heli" && gone < 90;
+    balloon.group.visible = riding && ride === "balloon";
+    for (const f of fleet) f.b.group.visible = balloon.group.visible;
+    if (heli.group.visible) {
+      // A hover holds still over the water; a few seconds after you go it noses over and leaves.
+      const away = Math.max(0, gone - 5);
+      const sp = leftAt < 0 ? 0 : Math.min(38, away * 3.5);
+      heliOut += sp * dt;
+      const t = simTime;
+      heli.group.position.set(
+        heliHome.x + heliOut,
+        heliHome.y + Math.sin(t * 0.7) * 0.35 + heliOut * 0.08,
+        heliHome.z + Math.sin(t * 0.43) * 0.25,
+      );
+      rideYaw = -Math.PI / 2;
+      heli.group.rotation.set(-Math.min(0.16, away * 0.05), rideYaw + Math.sin(t * 0.31) * 0.015, Math.sin(t * 0.53) * 0.02, "YXZ");
+      heli.group.updateMatrixWorld();
+      rideVel.set(sp, Math.cos(t * 0.7) * 0.25 + sp * 0.08, Math.cos(t * 0.43) * 0.11);
+      heli.update(dt, t, phase === "aboard" && cleared && rideT < HELI_CLEAR_S + 2.5);
+    }
+    if (balloon.group.visible) {
+      // The burner holds the height with a long blast every so often. One jumper lighter, the
+      // balloon climbs away after you leave.
+      const cyc = rideT % 9;
+      burn += ((cyc > 6 && cyc < 8.6 ? 1 : 0) - burn) * (1 - Math.exp(-12 * dt));
+      const rise = leftAt < 0 ? 0 : Math.max(0, 1.4 - gone * 0.07);
+      balloonRise += rise * dt;
+      balloon.group.position.set(
+        balloonStart.x + WIND_X * rideT,
+        balloonStart.y + Math.sin(rideT * 0.21) * 1.2 + balloonRise,
+        balloonStart.z + WIND_Z * rideT,
+      );
+      // Baskets turn slowly as they drift.
+      rideYaw = rideT * 0.012;
+      balloon.group.rotation.set(Math.sin(rideT * 0.6) * 0.006, rideYaw, Math.sin(rideT * 0.47) * 0.008, "YXZ");
+      balloon.group.updateMatrixWorld();
+      rideVel.set(WIND_X, Math.cos(rideT * 0.21) * 0.25 + rise, WIND_Z);
+      balloon.update(dt, simTime, burn);
+      for (const f of fleet) {
+        const fc = (rideT + f.phase) % 11;
+        f.burn += ((fc > 8 && fc < 10.4 ? 1 : 0) - f.burn) * (1 - Math.exp(-12 * dt));
+        f.b.group.position.copy(balloon.group.position).sub(_v1.set(0, balloonRise, 0)).add(f.off);
+        f.b.group.position.y += Math.sin(rideT * 0.17 + f.phase) * 3;
+        f.b.group.rotation.y = rideT * 0.009 + f.phase;
+        f.b.update(dt, simTime, f.burn);
+      }
+    }
+    if (phase === "aboard") {
+      pos.copy(ride === "heli" ? heli.group.position : balloon.group.position);
+      vel.copy(rideVel);
+    }
+  }
+
+  /** In the helicopter's door or the balloon's basket, until you go. */
+  function rideAboard(dt: number, input: ReturnType<typeof sample>) {
+    if (ride === "heli") {
+      if (!cleared && rideT > HELI_CLEAR_S) {
+        cleared = true;
+        flashText = "PILOT: CLEAR TO JUMP";
+        flashUntil = simTime + 2.6;
+        audio.beep(740, 0.14, 0.05);
+        audio.beep(980, 0.16, 0.05);
+      }
+      // Space pushes off the skid; once cleared, so does scooting forward off the floor.
+      if (input.jumpEdge || (cleared && input.forward > 0.6)) leaveRide();
+      return;
+    }
+    // In the basket: a step or two either way, then over the rim.
+    const fx = -Math.sin(localYaw);
+    const fz = -Math.cos(localYaw);
+    const rx = Math.cos(localYaw);
+    const rz = -Math.sin(localYaw);
+    const sp = 1.2;
+    const dx = (rx * input.strafe + fx * input.forward) * sp * dt;
+    const dz = (rz * input.strafe + fz * input.forward) * sp * dt;
+    if (Math.abs(dx) + Math.abs(dz) > 1e-5) walk += dt * 6;
+    riderX = clamp(riderX + dx, BASKET.x0, BASKET.x1);
+    riderZ = clamp(riderZ + dz, BASKET.z0, BASKET.z1);
+    if (input.jumpEdge) leaveRide();
+  }
+
+  /** Off the skid or over the rim: into dead air, with no airspeed yet to fly on. */
+  function leaveRide() {
+    const fromHeli = ride === "heli";
+    const v = fromHeli ? heli.group : balloon.group;
+    // The way you face, level, in the world.
+    _v2.set(-Math.sin(localYaw), 0, -Math.cos(localYaw)).applyQuaternion(v.quaternion);
+    _v2.y = 0;
+    _v2.normalize();
+    if (fromHeli) _v3.copy(HELI_EXIT);
+    else _v3.set(riderX - Math.sin(localYaw) * 1.1, RIM_Y - 0.2, riderZ - Math.cos(localYaw) * 1.1);
+    v.localToWorld(_v3);
+    pos.copy(_v3);
+    vel.copy(rideVel).addScaledVector(_v2, fromHeli ? 1.6 : 1.1);
+    vel.y += fromHeli ? -0.4 : 0.6;
+    _e.setFromQuaternion(camera.quaternion, "YXZ");
+    bodyYaw = _e.y;
+    bodyPitch = _e.x;
+    bank = 0;
+    heading = bodyYaw;
+    leftOnRed = fromHeli && !cleared;
+    leftAt = simTime;
+    exitTime = simTime;
+    save.jumps += 1;
+    const ft = Math.round(pos.y * FT_PER_M).toLocaleString("en-US");
+    pushLog(
+      fromHeli
+        ? `Off the helicopter at ${ft} ft${leftOnRed ? " · before the pilot cleared you" : ""}`
+        : `Over the rim of the balloon at ${ft} ft`,
+    );
+    phase = "freefall";
+    flying = "none";
+    deadAir = true;
+    stableS = null;
+    resetFormation();
+    if (suit === "wing") startWing(bodyYaw);
+    else {
+      // Rolling off head first, with a twist one way or the other.
+      tumbleP = 0;
+      tumbleR = 0;
+      spinP = fromHeli ? -0.9 : -1.15;
+      spinR = (Math.random() < 0.5 ? -1 : 1) * (fromHeli ? 0.3 : 0.45);
+      buffetAt = Math.random() * 6;
+    }
+    persist();
+  }
+
+  /**
+   * Dead air off a helicopter or a balloon. With no airspeed the body rolls off head first and
+   * gets knocked about until the air is fast enough to fly on. A held arch (W) stiffens it and
+   * damps the tumble out; going limp lets it wander for seconds longer.
+   */
+  function steady(dt: number, arch: boolean) {
+    if (phase !== "freefall" || wing) {
+      // Opening the canopy, or a suit filling with air, straightens you out.
+      const k = Math.exp(-4 * dt);
+      tumbleP *= k;
+      tumbleR *= k;
+      spinP *= k;
+      spinR *= k;
+      return;
+    }
+    const air = Math.hypot(vel.x - WIND_X, vel.y, vel.z - WIND_Z);
+    const q = Math.min(1.5, (air / 50) ** 2);
+    const stiff = 5 * q * (arch ? 2.6 : 0.4);
+    const damp = (0.4 + 2 * q) * (arch ? 2 : 1);
+    const buffet = 2.2 * Math.min(1, air / 12) * clamp((50 - air) / 15, 0, 1) * (arch ? 0.15 : 1);
+    const t = simTime - exitTime + buffetAt;
+    spinP += (-stiff * tumbleP - damp * spinP + buffet * Math.sin(t * 1.9)) * dt;
+    spinR += (-stiff * tumbleR - damp * spinR + buffet * Math.sin(t * 1.3 + 1)) * dt;
+    tumbleP += spinP * dt;
+    tumbleR += spinR * dt;
+    const settled =
+      Math.abs(tumbleP) < 0.15 && Math.abs(tumbleR) < 0.15 && Math.abs(spinP) < 0.25 && Math.abs(spinR) < 0.25;
+    if (stableS === null && simTime - exitTime > 0.8 && settled) {
+      stableS = simTime - exitTime;
+      pushLog(`Stable ${stableS.toFixed(1)} s after the exit`);
+      flashText = "STABLE";
+      flashUntil = simTime + 1.4;
+      audio.beep(880, 0.1, 0.05);
+    }
+  }
+
   /** Wingsuit flight: the suit flies, the eyes follow the flight path, and close passes count. */
   function flyTheSuit(dt: number, input: ReturnType<typeof sample>) {
     if (!wing) return;
@@ -1898,6 +2192,7 @@ export function mountGame(
 
   function poseName(forward: number) {
     if (phase !== "freefall") return phase === "canopy" ? "CANOPY" : "";
+    if (deadAir && !wing && stableS === null) return "DEAD AIR";
     if (wing) {
       if (wingFill(wing) < 0.9) return "SUIT FILLING";
       return wing.pitch > 0.35 ? "DIVE" : wing.pitch < -0.35 ? "FLARE" : "GLIDE";
@@ -1952,6 +2247,10 @@ export function mountGame(
           : "WALK TO THE DOOR";
     } else if (phase === "roof") {
       prompt = roofPrompt();
+    } else if (phase === "aboard") {
+      if (ride === "balloon") prompt = coarse ? "FACE OUT · TAP JUMP TO GO OVER THE RIM" : "FACE OUT · SPACE CLIMBS OVER THE RIM";
+      else if (!cleared) prompt = "HOLD ON · THE PILOT IS SETTLING THE HOVER";
+      else prompt = coarse ? "CLEAR TO JUMP · TAP JUMP TO PUSH OFF" : "CLEAR TO JUMP · SPACE PUSHES OFF";
     } else if (phase === "freefall") {
       const pullKey = coarse ? "TAP PULL" : "SPACE PULLS";
       if (wing) {
@@ -1962,6 +2261,8 @@ export function mountGame(
         else prompt = `GLIDE ${glide > 9.9 ? "10+" : glide.toFixed(1)} · ${pullKey}`;
       } else if (mode === "base") prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${coarse ? "TAP PULL" : "SPACE PULLS"}`;
       else if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
+      else if (deadAir && stableS === null) prompt = coarse ? "DEAD AIR · PUSH UP TO ARCH" : "DEAD AIR · HOLD W TO ARCH";
+      else if (deadAir) prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${pullKey}`;
       else if (docked) prompt = "DOCKED · HOLD ON UNTIL BREAK-OFF";
       else if (formation.active()) {
         formation.slot(_base);
@@ -2018,16 +2319,19 @@ export function mountGame(
         ? heading
         : phase === "cabin" || phase === "menu"
           ? planeYaw + localYaw
-          : phase === "roof"
-            ? localYaw
-            : bodyYaw;
+          : phase === "aboard"
+            ? rideYaw + localYaw
+            : phase === "roof"
+              ? localYaw
+              : bodyYaw;
     // The beach on a skydive; off a building, the nearest open ground.
     if (mode === "base") nearestOpen(pos.x, pos.z, lzPos);
     else lzPos.set(DZ_X, 0, DZ_Z);
     const dx = lzPos.x - pos.x;
     const dz = lzPos.z - pos.z;
     const want = Math.atan2(-dx, -dz);
-    const faceYaw = phase === "roof" ? localYaw : phase === "freefall" ? bodyYaw : heading;
+    const faceYaw =
+      phase === "roof" ? localYaw : phase === "aboard" ? rideYaw + localYaw : phase === "freefall" ? bodyYaw : heading;
     const rel = Math.atan2(Math.sin(want - faceYaw), Math.cos(want - faceYaw));
 
     camera.updateMatrixWorld();
@@ -2084,7 +2388,12 @@ export function mountGame(
       if (pad && d > 18) marker(_base.set(pad.x, pad.y, pad.z), `${pad.name.toUpperCase()} ${Math.round(d)} m`);
     }
     hud.dzVisible =
-      phase === "freefall" || phase === "canopy" || phase === "deploying" || phase === "malfunction" || phase === "roof";
+      phase === "freefall" ||
+      phase === "canopy" ||
+      phase === "deploying" ||
+      phase === "malfunction" ||
+      phase === "roof" ||
+      phase === "aboard";
     hud.dzRel = THREE.MathUtils.radToDeg(rel);
     hud.dzDist = Math.hypot(dx, dz);
     hud.dzLabel = mode === "base" ? "LZ" : "DZ";
@@ -2135,6 +2444,27 @@ export function mountGame(
       camera.quaternion.copy(plane.quaternion).multiply(_q);
       return;
     }
+    if (phase === "aboard") {
+      const v = ride === "heli" ? heli.group : balloon.group;
+      if (ride === "heli") {
+        _v3.copy(HELI_SEAT);
+        // The airframe hums with the rotor.
+        if (!reduce) {
+          _v3.y += Math.sin(simTime * 43) * 0.005;
+          _v3.z += Math.sin(simTime * 31) * 0.004;
+        }
+      } else _v3.set(riderX, STAND_EYE + (reduce ? 0 : Math.sin(walk) * 0.012), riderZ);
+      v.localToWorld(_v3);
+      camera.position.copy(_v3);
+      _e.set(localPitch, localYaw, 0, "YXZ");
+      _q.setFromEuler(_e);
+      camera.quaternion.copy(v.quaternion).multiply(_q);
+      if (Math.abs(camera.fov - 72) > 0.25) {
+        camera.fov += (72 - camera.fov) * 0.08;
+        camera.updateProjectionMatrix();
+      }
+      return;
+    }
     if (phase === "roof") {
       const bob = reduce ? 0 : Math.sin(walk) * 0.025;
       camera.position.set(pos.x, pos.y + STAND_EYE + bob, pos.z);
@@ -2157,7 +2487,7 @@ export function mountGame(
     if (phase === "canopy" || phase === "down") {
       _e.set(-0.22 + lookOffPitch, heading + lookOffYaw, bank * 0.65, "YXZ");
     } else {
-      _e.set(bodyPitch, bodyYaw, bank, "YXZ");
+      _e.set(bodyPitch + tumbleP, bodyYaw, bank + tumbleR, "YXZ");
     }
     if (shock > 0.01 && !reduce) {
       _e.x -= shock * shock * 0.32;
@@ -2238,6 +2568,21 @@ export function mountGame(
           p.rightHand = handR.copy(right);
         }
       }
+    } else if (phase === "aboard") {
+      const v = ride === "heli" ? heli.group : balloon.group;
+      if (ride === "heli") {
+        // Sitting in the door, legs out on the skid; only the head turns.
+        p.mode = "perch";
+        _v3.copy(HELI_SEAT);
+        bodyE.set(0, HELI_SEAT_YAW, 0, "YXZ");
+      } else {
+        p.mode = "cabin";
+        _v3.set(riderX, STAND_EYE, riderZ);
+        bodyE.set(0, localYaw, 0, "YXZ");
+      }
+      v.localToWorld(_v3);
+      bodyQ.setFromEuler(bodyE).premultiply(v.quaternion);
+      bodyFrame.compose(_v3, bodyQ, one);
     } else if (phase === "roof") {
       p.mode = "cabin";
       _v3.set(pos.x, pos.y + STAND_EYE, pos.z);
@@ -2285,7 +2630,8 @@ export function mountGame(
   /** Your shadow and the other jumpers' on the ground, once you're low enough to see them. */
   function castShadows() {
     casters.length = 0;
-    const out = phase !== "menu" && phase !== "cabin" && phase !== "roof" && phase !== "impact";
+    const out =
+      phase !== "menu" && phase !== "cabin" && phase !== "aboard" && phase !== "roof" && phase !== "impact";
     if (out) casters.push({ feet: pos, wing: canopy.visible ? canopy : null });
     formation.casters(casters);
     shadows.update(casters, camera.position);
@@ -2312,12 +2658,21 @@ export function mountGame(
 
   function audioMix() {
     audio.setMuted(bridge.muted);
+    // The rotor and the burner, fading with distance once you have left them behind.
+    const near = (at: THREE.Vector3, range: number) => clamp(1 - at.distanceTo(camera.position) / range, 0, 1) ** 2;
+    const live = phase !== "impact";
+    audio.vehicle(
+      live && heli.group.visible ? 0.55 * near(heli.group.position, 700) : 0,
+      live && balloon.group.visible ? burn * near(balloon.group.position, 350) : 0,
+    );
     const air = Math.hypot(vel.x, vel.y, vel.z);
     if (phase === "impact") audio.update(0, 0, 0);
     else if (phase === "menu") audio.update(0.02, 0.045, 20);
     else if (phase === "cabin") audio.update(inDoor ? 0.24 : 0.035, inDoor ? 0.03 : 0.11, inDoor ? 40 : 10);
     // A steady breeze across the top of a tower.
     else if (phase === "roof") audio.update(0.08, 0, 9);
+    // The rotor wash buffets the open door; the balloon is the quietest place in the sky.
+    else if (phase === "aboard") audio.update(ride === "heli" ? 0.16 : 0.012, 0, ride === "heli" ? 18 : 4);
     else if (phase === "canopy" || phase === "down") audio.update(0.045, 0, 12);
     else audio.update(clamp(air / 85, 0, 1) * 0.36, 0, air);
   }
@@ -2500,6 +2855,7 @@ export function mountGame(
     isDocked: () => docked,
     getPos: () => [pos.x, pos.y, pos.z],
     getOutcome: () => outcome,
+    getTumble: () => [tumbleP, tumbleR, stableS ?? -1],
     addLook: (dx: number, dy: number) => {
       lookDX += dx;
       lookDY += dy;
@@ -2528,6 +2884,9 @@ export function mountGame(
     streaks.dispose();
     shadows.dispose();
     cabin.dispose();
+    heli.dispose();
+    balloon.dispose();
+    fleet.forEach((f) => f.b.dispose());
     body.dispose();
     formation.dispose();
     normalTex.dispose();
@@ -2615,6 +2974,7 @@ declare global {
       isDocked?: () => boolean;
       getPos?: () => number[];
       getOutcome?: () => unknown;
+      getTumble?: () => number[];
       addLook?: (dx: number, dy: number) => void;
     };
   }
