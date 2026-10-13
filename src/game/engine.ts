@@ -22,6 +22,7 @@ import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
 import { dressCabin } from "./cabin";
 import { BASE_FALL, BREAKOFF_FT, LOOKS, createFormation } from "./formation";
 import { createCloudField } from "./clouds";
+import { createGlow } from "./glow";
 import { scoreJump } from "./score";
 import { createShadows, type ShadowCaster } from "./shadow";
 import { createStreaks } from "./streaks";
@@ -291,6 +292,7 @@ export function mountGame(
   // The time of day sets the sun, sky and haze that everything below is built with.
   const look = applyLight(bridge.light);
   renderer.toneMappingExposure = look.exposure;
+  const post = createGlow(renderer, look.glow, window.matchMedia("(pointer: coarse)").matches ? 4 : 5);
 
   const scene = new THREE.Scene();
   const atmo = createAtmosphere(renderer);
@@ -1876,6 +1878,7 @@ export function mountGame(
     sky.visible = true;
     camera.far = far;
     camera.updateProjectionMatrix();
+    post.render();
   }
 
   function resize() {
@@ -2024,6 +2027,7 @@ export function mountGame(
       maybe.alphaMap?.dispose();
       m.dispose();
     });
+    post.dispose();
     renderer.dispose();
   };
 }

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
+import type { Glow } from "./glow";
 import type { Light } from "./types";
 
 type Rgb = readonly [number, number, number];
@@ -34,6 +35,8 @@ export type LightPreset = {
   /** Lit office windows, and streetlights on the ground and along the Drive. */
   windows: number;
   streets: number;
+  /** Bloom and color grade over the finished frame. */
+  glow: Glow;
 };
 
 /** A sun `elevation` degrees up, `azimuth` degrees clockwise from north (north is -z, east +x). */
@@ -67,6 +70,7 @@ const PRESETS: Record<Light, LightPreset> = {
     lake: 1,
     windows: 0.4,
     streets: 0,
+    glow: { threshold: 0.96, knee: 0.04, strength: 0.5, saturation: 1.04, contrast: 1.03, vignette: 0.12, lift: [0, 0, 0], gain: [1, 1, 1] },
   },
   golden: {
     sun: sunAt(7, 291),
@@ -89,6 +93,7 @@ const PRESETS: Record<Light, LightPreset> = {
     lake: 0.8,
     windows: 0.7,
     streets: 0,
+    glow: { threshold: 0.93, knee: 0.05, strength: 0.5, saturation: 1.06, contrast: 1.04, vignette: 0.18, lift: [0.012, 0.004, 0], gain: [1.02, 1, 0.97] },
   },
   dusk: {
     sun: sunAt(1.2, 296),
@@ -111,6 +116,7 @@ const PRESETS: Record<Light, LightPreset> = {
     lake: 0.5,
     windows: 1.6,
     streets: 0.6,
+    glow: { threshold: 0.88, knee: 0.06, strength: 0.8, saturation: 1.08, contrast: 1.05, vignette: 0.24, lift: [0, 0.004, 0.02], gain: [1, 0.99, 1.02] },
   },
 };
 
@@ -521,7 +527,8 @@ export function createWaterMaterial(normals: THREE.Texture, haze: THREE.Color, z
         vec3 skyRefl = mix(uHaze, uZenith, pow(clamp(r.y, 0.0, 1.0), 0.45));
         float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, view), 0.0), 5.0);
         float deep = smoothstep(uShore + 10.0, uShore + 900.0, vWorld.x);
-        vec3 body = mix(vec3(0.035, 0.20, 0.22), vec3(0.006, 0.03, 0.055), deep);
+        // Shallow water only glows teal in daylight; in low light it goes dark like the rest.
+        vec3 body = mix(vec3(0.035, 0.20, 0.22) * uLake, vec3(0.006, 0.03, 0.055), deep);
         body *= (0.55 + 0.45 * max(uSun.y, 0.0)) * uLake;
         vec3 col = mix(body, skyRefl, fres);
         float rs = max(dot(r, uSun), 0.0);
