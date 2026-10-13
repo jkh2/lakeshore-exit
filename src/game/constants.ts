@@ -1,4 +1,4 @@
-import type { Light } from "./types";
+import type { Light, PadId } from "./types";
 
 export const FT_PER_M = 3.280839895;
 export const MPH_PER_MPS = 2.236936292;
@@ -31,4 +31,78 @@ export const LIGHTS = ["day", "golden", "dusk"] as const satisfies readonly Ligh
 
 export function isLight(v: unknown): v is Light {
   return typeof v === "string" && (LIGHTS as readonly string[]).includes(v);
+}
+
+/** BASE: the shortest drop worth jumping from a roof edge. */
+export const MIN_BASE_M = 100;
+/** BASE pull calls: pull at the first, now at the second, and below the third it is too late. */
+export const BASE_PULL_FT = 600;
+export const BASE_NOW_FT = 400;
+export const BASE_HARD_FT = 250;
+
+export type PadSpec = {
+  id: PadId;
+  name: string;
+  /** Roof height, meters. */
+  heightM: number;
+  lat: number;
+  lon: number;
+  /** Where the mark sits from the tower's center, meters east and south. */
+  dx: number;
+  dz: number;
+  /** The way you face when you arrive: toward an edge you can jump from. */
+  yaw: number;
+};
+
+/** The marked rooftops: land on them under canopy, or start a BASE jump from one. */
+export const PADS: readonly PadSpec[] = [
+  {
+    id: "southloop",
+    name: "South Loop Tower",
+    heightM: 274,
+    lat: 41.8676,
+    lon: -87.6243,
+    dx: 0,
+    dz: 0,
+    yaw: -Math.PI / 2,
+  },
+  {
+    id: "aqua",
+    name: "Aqua",
+    heightM: 262,
+    lat: 41.8863,
+    lon: -87.6198,
+    dx: 0,
+    dz: 0,
+    yaw: -Math.PI / 2,
+  },
+  {
+    id: "aon",
+    name: "Aon Center",
+    heightM: 346,
+    lat: 41.8853,
+    lon: -87.6215,
+    dx: 0,
+    dz: 0,
+    yaw: -Math.PI / 2,
+  },
+  // The top two of Willis's nine tubes; its lower tubes crowd every side but the west.
+  {
+    id: "willis",
+    name: "Willis Tower",
+    heightM: 442,
+    lat: 41.8789,
+    lon: -87.6359,
+    dx: -11.45,
+    dz: 0,
+    yaw: Math.PI / 2,
+  },
+];
+
+export function padById(id: string): PadSpec {
+  return PADS.find((p) => p.id === id) ?? PADS[0]!;
+}
+
+export function isPadId(v: unknown): v is PadId {
+  return typeof v === "string" && PADS.some((p) => p.id === v);
 }

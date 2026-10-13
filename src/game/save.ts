@@ -1,4 +1,4 @@
-import { DEFAULT_EXIT_FT, DEFAULT_MAL_PCT, SAVE_KEY, isLight } from "./constants";
+import { DEFAULT_EXIT_FT, DEFAULT_MAL_PCT, SAVE_KEY, isLight, isPadId } from "./constants";
 import type { Save } from "./types";
 
 export function defaultSave(): Save {
@@ -11,6 +11,8 @@ export function defaultSave(): Save {
     altitudeFt: DEFAULT_EXIT_FT,
     malPct: DEFAULT_MAL_PCT,
     light: "day",
+    ride: "plane",
+    roof: "southloop",
   };
 }
 
@@ -31,6 +33,8 @@ export function loadSave(): Save {
         typeof parsed.altitudeFt === "number" ? parsed.altitudeFt : base.altitudeFt,
       malPct: typeof parsed.malPct === "number" ? parsed.malPct : base.malPct,
       light: isLight(parsed.light) ? parsed.light : base.light,
+      ride: parsed.ride === "roof" ? "roof" : "plane",
+      roof: isPadId(parsed.roof) ? parsed.roof : base.roof,
     };
   } catch {
     return defaultSave();

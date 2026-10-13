@@ -2,6 +2,9 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { createAudio } from "./audio";
 import {
+  BASE_HARD_FT,
+  BASE_NOW_FT,
+  BASE_PULL_FT,
   DECISION_FT,
   DZ_X,
   DZ_Z,
@@ -18,7 +21,7 @@ import {
   WIND_Z,
 } from "./constants";
 import { loadSave, writeSave } from "./save";
-import type { Bridge, Hud, Outcome, Phase } from "./types";
+import type { Bridge, Hud, JumpMode, Outcome, Phase } from "./types";
 import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
 import { dressCabin } from "./cabin";
@@ -30,6 +33,8 @@ import { createShadows, type ShadowCaster } from "./shadow";
 import { createStreaks } from "./streaks";
 import { CITY, createSkyline } from "./skyline";
 import { createLife } from "./life";
+import { BODY_R, areaAt, canBaseFrom, createPads, lookAhead, nearestOpen, stepTo } from "./roofs";
+import type { Contact, Solid } from "./solids";
 import { SUN_DIR, applyLight, cityTexture, createAtmosphere, createWaterMaterial, streetLights } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
@@ -40,6 +45,21 @@ const _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler(0, 0, 0, "YXZ");
 const _base = new THREE.Vector3();
+const _prev = new THREE.Vector3();
+
+/** Walking pace on a roof, and the run-up to an edge. */
+const WALK_MPS = 2.4;
+const RUN_MPS = 4.8;
+/** Eye height standing up, matching the body's frame in the cabin. */
+const STAND_EYE = 1.5;
+/** Seconds for a BASE canopy to open: a big pilot chute and no bag to wait on. */
+const BASE_OPEN_S = 1.25;
+
+/** Where the pull calls come, for the jump in progress. */
+const DECK = {
+  skydive: { pull: DECISION_FT, now: PULL_NOW_FT, hard: HARD_DECK_FT },
+  base: { pull: BASE_PULL_FT, now: BASE_NOW_FT, hard: BASE_HARD_FT },
+} as const;
 
 /** The title screen looks across Monroe Harbor at downtown. */
 const MENU_CAM = new THREE.Vector3(1800, 70, -1200);
@@ -223,7 +243,7 @@ function box(
   return mesh;
 }
 
-function drawTape(canvas: HTMLCanvasElement, altFt: number) {
+function drawTape(canvas: HTMLCanvasElement, altFt: number, deck: { pull: number; hard: number }) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const w = canvas.width;
@@ -235,15 +255,15 @@ function drawTape(canvas: HTMLCanvasElement, altFt: number) {
   const center = h / 2;
   const px = h / 1600;
   const yFor = (alt: number) => center - (alt - altFt) * px;
-  const yHard = yFor(HARD_DECK_FT);
-  const yDec = yFor(DECISION_FT);
+  const yHard = yFor(deck.hard);
+  const yDec = yFor(deck.pull);
   ctx.fillStyle = "rgba(226,61,61,0.38)";
   ctx.fillRect(0, Math.max(0, yHard), w, h - Math.max(0, yHard));
   ctx.fillStyle = "rgba(240,162,2,0.28)";
   const top = clamp(yDec, 0, h);
   const bot = clamp(Math.max(yHard, yDec), 0, h);
   if (bot > top) ctx.fillRect(0, top, w, bot - top);
-  const start = Math.floor((altFt - 900) / 100) * 100;
+  const start = Math.max(0, Math.floor((altFt - 900) / 100) * 100);
   ctx.textBaseline = "middle";
   ctx.font = `${12 * s}px sans-serif`;
   for (let a = start; a <= altFt + 900; a += 100) {
@@ -266,8 +286,8 @@ function drawTape(canvas: HTMLCanvasElement, altFt: number) {
     ctx.font = `700 ${11 * s}px sans-serif`;
     ctx.fillText(text, 4 * s, y - 9 * s);
   };
-  mark(DECISION_FT, "PULL", "#f0a202");
-  mark(HARD_DECK_FT, "HARD", "#e23d3d");
+  mark(deck.pull, "PULL", "#f0a202");
+  mark(deck.hard, "HARD", "#e23d3d");
   ctx.fillStyle = "#f0a202";
   ctx.beginPath();
   ctx.moveTo(w - 2, center);
@@ -396,6 +416,8 @@ export function mountGame(
 
   const skyline = createSkyline(scene, { aniso, coarse, onTop, windows: look.windows, streets: look.streets });
   const life = createLife(scene, { coarse, night: look.streets > 0, onTop });
+  const solids = skyline.solids;
+  const pads = createPads(scene, solids, { onTop, night: look.streets > 0 });
 
   const verge = new THREE.Mesh(groundGeo(-10, 30, -WORLD, WORLD, 0.09), onTop(grassMat.clone(), 2));
   verge.frustumCulled = false;
@@ -694,6 +716,17 @@ export function mountGame(
   let green = false;
   let wasGreen = false;
   let outcome: Outcome | null = null;
+  let mode: JumpMode = "skydive";
+  /** On a roof: running for the edge after a press of jump. */
+  let runUp = false;
+  /** The roof you stand on, and for the debrief the one you jumped from and how. */
+  let roofName = "";
+  let jumpedFrom: string | null = null;
+  let ranOff = false;
+  let delayS: number | null = null;
+  /** The surface under you while you fly: a roof, or the ground. */
+  let floorY = 0;
+  const lzPos = new THREE.Vector3();
   const keys = new Set<string>();
   let qaKeys: Set<string> | null = null;
   let prevQa = new Set<string>();
@@ -708,6 +741,7 @@ export function mountGame(
   const log: string[] = [];
   const hud: Hud = {
     phase: "menu",
+    mode: "skydive",
     altitudeFt: 12500,
     fallMph: 0,
     groundMph: 0,
@@ -728,6 +762,7 @@ export function mountGame(
     baseLabel: "",
     dzRel: 0,
     dzDist: 0,
+    dzLabel: "DZ",
     dzVisible: false,
     outcome: null,
     canopy: "none",
@@ -754,8 +789,8 @@ export function mountGame(
     planeYaw = Math.PI;
   }
 
-  function begin() {
-    phase = "cabin";
+  /** Clears everything one jump leaves behind. */
+  function resetJump() {
     outcome = null;
     log.length = 0;
     mal = "none";
@@ -774,19 +809,70 @@ export function mountGame(
     canopy.visible = false;
     streamer.visible = false;
     resetFormation();
+    bank = 0;
+    runUp = false;
+    jumpedFrom = null;
+    ranOff = false;
+    delayS = null;
+    audio.resetDeath();
+    audio.resume();
+  }
+
+  function begin() {
+    resetJump();
+    save.ride = bridge.ride;
+    save.roof = bridge.roof;
+    const pad = bridge.ride === "roof" ? (pads.list.find((p) => p.id === bridge.roof) ?? pads.list[0]) : null;
+    if (pad) {
+      // A few steps back from the edge you came to jump, looking over it.
+      const fx = -Math.sin(pad.yaw);
+      const fz = -Math.cos(pad.yaw);
+      const ahead = lookAhead(solids, pad.x, pad.y, pad.z, fx, fz, 60);
+      const back = ahead.kind === "edge" ? Math.max(0, ahead.dist - 4) : 0;
+      standOnRoof(pad.x + fx * back, pad.z + fz * back, pad.yaw, pad.name);
+      localPitch = -0.3;
+      persist();
+      return;
+    }
+    phase = "cabin";
+    mode = "skydive";
     riderX = -0.05;
     riderZ = 1.05;
     localYaw = -Math.PI / 2;
     localPitch = -0.08;
-    bank = 0;
     malChance = clamp(bridge.malChance, 0, 0.4);
     lockedAlt = clamp(bridge.altitudeFt, 8000, 20000) / FT_PER_M;
     save.altitudeFt = Math.round(lockedAlt * FT_PER_M);
     save.malPct = Math.round(malChance * 100);
     resetRun();
     plane.position.y = lockedAlt;
-    audio.resetDeath();
-    audio.resume();
+    persist();
+  }
+
+  /** Puts you on the roof at (x, z), facing `yaw`, to walk to an edge and jump. */
+  function standOnRoof(x: number, z: number, yaw: number, name: string) {
+    phase = "roof";
+    mode = "base";
+    const top = solids.top(x, z);
+    pos.set(x, top ? top.y1 : 0, z);
+    vel.set(0, 0, 0);
+    localYaw = yaw;
+    localPitch = -0.1;
+    roofName = name;
+    runUp = false;
+    walk = 0;
+    flashText = `${name.toUpperCase()} · ${Math.round(pos.y * FT_PER_M).toLocaleString("en-US")} FT`;
+    flashUntil = simTime + 3.5;
+  }
+
+  /** From the debrief of a rooftop landing: back on your feet up there, for a BASE jump. */
+  function baseFromHere() {
+    if (!outcome?.canBase) return;
+    const name = outcome.roof ?? "the roof";
+    const { x, z } = pos;
+    const yaw = heading;
+    resetJump();
+    standOnRoof(x, z, yaw, name);
     persist();
   }
 
@@ -816,7 +902,7 @@ export function mountGame(
 
   /** Scores the jump and keeps the best. Called once per jump, as it ends. */
   function score(facts: Omit<Outcome, "log" | "reason" | "score">) {
-    const result = scoreJump({ ...facts, dockedFt, pullFt, sepM: pullSep });
+    const result = scoreJump({ ...facts, dockedFt, pullFt, sepM: pullSep, running: ranOff });
     if (facts.kind !== "impact" && result.total > (save.bestScore ?? 0)) {
       result.newBest = true;
       save.bestScore = result.total;
@@ -832,6 +918,13 @@ export function mountGame(
     pushLog(reason);
     const facts = {
       kind: "impact" as const,
+      mode,
+      area: "none" as const,
+      roof: null,
+      padM: null,
+      canBase: false,
+      from: jumpedFrom,
+      delayS,
       distanceM: Math.hypot(pos.x - DZ_X, pos.z - DZ_Z),
       usedReserve,
       redLight: leftOnRed,
@@ -845,30 +938,42 @@ export function mountGame(
     persist();
   }
 
-  function finishDown() {
+  /** Under canopy and down: on the ground, in the lake, or on the roof `roof`. */
+  function finishDown(roof: Solid | null = null) {
     const dist = Math.hypot(pos.x - DZ_X, pos.z - DZ_Z);
     const gs = Math.hypot(vel.x, vel.z);
     const intoWind = -Math.sin(heading) > 0.62;
     const hot = gs > 16 || -vel.y > 7.2;
-    const water = pos.x > SHORE_X;
-    const onBeach = pos.x >= -8 && pos.x <= SHORE_X + 6;
-    pos.y = 0;
+    const area = roof ? "roof" : areaAt(pos.x, pos.z);
+    const water = area === "water";
+    const onBeach = area === "beach";
+    pos.y = roof ? roof.y1 : 0;
     vel.y = 0;
+    const pad = roof ? pads.at(pos.x, pos.y, pos.z) : null;
+    const roofLabel = pad ? pad.name : roof ? (pos.x > SHORE_X ? "Navy Pier" : "a rooftop") : null;
     const facts = {
       kind: water ? ("water" as const) : ("landed" as const),
+      mode,
+      area,
+      roof: roofLabel,
+      padM: pad ? Math.hypot(pos.x - pad.x, pos.z - pad.z) : null,
+      canBase: !!roof && canBaseFrom(solids, pos.x, pos.y, pos.z),
+      from: jumpedFrom,
+      delayS,
       distanceM: dist,
       usedReserve,
       redLight: leftOnRed,
       intoWind,
       hot,
-      onBeach: !water && onBeach,
+      onBeach,
     };
     outcome = { ...facts, log: log.slice(), reason: water ? "Water" : "", score: score(facts) };
     if (!water) {
       save.rides += 1;
       if (onBeach && (save.bestM === null || dist < save.bestM)) save.bestM = Math.round(dist * 10) / 10;
     }
-    pushLog(water ? "Water landing" : `Down · ${Math.round(dist)} m`);
+    if (roof) pushLog(`Down on ${roofLabel ?? "a roof"} · ${Math.round(pos.y * FT_PER_M).toLocaleString("en-US")} ft up`);
+    else pushLog(water ? "Water landing" : `Down · ${Math.round(dist)} m`);
     if (outcome) outcome.log = log.slice();
     phase = "down";
     persist();
@@ -995,11 +1100,16 @@ export function mountGame(
     gesture = "pull";
     gestureStart = simTime;
     deployingReserve = false;
-    mal = Math.random() < malChance ? (Math.random() < 0.62 ? "streamer" : "twist") : "none";
+    // A BASE rig has no reserve, so the game gives it no malfunctions either.
+    const base = mode === "base";
+    mal = !base && Math.random() < malChance ? (Math.random() < 0.62 ? "streamer" : "twist") : "none";
     heading = bodyYaw;
-    pushLog(`Pull at ${Math.round(alt).toLocaleString("en-US")} ft`);
+    if (base) delayS = simTime - exitTime;
+    pushLog(
+      `Pull at ${Math.round(alt).toLocaleString("en-US")} ft${base ? ` · ${(delayS ?? 0).toFixed(1)} s delay` : ""}`,
+    );
     audio.fabric();
-    if (alt < 700) pushLog("That pull is late");
+    if (!base && alt < 700) pushLog("That pull is late");
     if (docked) {
       docked = false;
       formation.setPlayerDocked(false);
@@ -1058,6 +1168,30 @@ export function mountGame(
 
   function forcePhase(p: string) {
     outcome = null;
+    if (p.startsWith("roof")) {
+      const pad = pads.list.find((q) => q.id === p.split(":")[1]) ?? pads.list[0];
+      resetJump();
+      if (pad) standOnRoof(pad.x, pad.z, pad.yaw, pad.name);
+      return;
+    }
+    if (p === "padfinal") {
+      // On final for the South Loop roof, into the wind off the lake.
+      const pad = pads.list[0];
+      if (!pad) return;
+      resetJump();
+      phase = "canopy";
+      mode = "skydive";
+      flying = "main";
+      pos.set(pad.x - 40, pad.y + 30, pad.z + 2);
+      heading = -Math.PI / 2;
+      bodyYaw = heading;
+      vel.set(10.5 + WIND_X, -5.4, WIND_Z);
+      canopy.visible = true;
+      lookOffYaw = 0;
+      lookOffPitch = 0;
+      return;
+    }
+    mode = "skydive";
     if (p === "canopy") {
       phase = "canopy";
       flying = "main";
@@ -1118,6 +1252,10 @@ export function mountGame(
     } else if (p === "cabin") begin();
   }
 
+  function openDur() {
+    return deployingReserve ? 1.45 : mode === "base" ? BASE_OPEN_S : 2.65;
+  }
+
   plane.position.copy(path[0] ?? new THREE.Vector3());
   plane.position.y = clamp(bridge.altitudeFt, 8000, 20000) / FT_PER_M;
 
@@ -1144,13 +1282,15 @@ export function mountGame(
     const pullEdge = (bridge.pull && !prevPull) || edgeOf("Space");
     const cutEdge = (bridge.cut && !prevCut) || edgeOf("KeyX") || edgeOf("KeyC");
     const reserveEdge = (bridge.reserve && !prevReserve) || edgeOf("KeyR");
+    // Shift runs; on a touch screen, the stick pushed all the way out.
+    const run = source.has("ShiftLeft") || source.has("ShiftRight") || Math.hypot(bridge.moveX, bridge.moveY) > 0.92;
     prevJump = bridge.jump;
     prevPull = bridge.pull;
     prevCut = bridge.cut;
     prevReserve = bridge.reserve;
     if (qaKeys) prevQa = new Set(qaKeys);
     else eventEdges.clear();
-    return { turn, strafe, forward, jumpEdge, pullEdge, cutEdge, reserveEdge };
+    return { turn, strafe, forward, run, jumpEdge, pullEdge, cutEdge, reserveEdge };
   }
 
   function step(dt: number, input: ReturnType<typeof sample> | null) {
@@ -1192,15 +1332,16 @@ export function mountGame(
     waterUniforms.uCam.value.copy(camera.position);
     skyline.update(dt);
     life.update(simTime);
+    pads.update(simTime);
     sock.rotation.y = Math.sin(simTime * 7) * 0.12;
     (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity =
       Math.sin(simTime * 8) > 0.4 ? 2 : 0.15;
 
     if (!input) return;
     const sens = 0.00215;
-    if (phase === "cabin") {
+    if (phase === "cabin" || phase === "roof") {
       localYaw -= lookDX * sens;
-      localPitch = clamp(localPitch - lookDY * sens, -1.2, 1.05);
+      localPitch = clamp(localPitch - lookDY * sens, phase === "roof" ? -1.4 : -1.2, 1.05);
     } else if (phase === "canopy" || phase === "down") {
       lookOffYaw = clamp(lookOffYaw - lookDX * sens, -1.35, 1.35);
       lookOffPitch = clamp(lookOffPitch - lookDY * sens, -1.0, 1.5);
@@ -1251,6 +1392,11 @@ export function mountGame(
       return;
     }
 
+    if (phase === "roof") {
+      walkRoof(dt, input);
+      return;
+    }
+
     formation.update(dt, simTime);
     if (phase === "down" || phase === "impact") return;
 
@@ -1264,7 +1410,9 @@ export function mountGame(
     if (reserveArmed && phase === "freefall" && (input.reserveEdge || input.pullEdge)) pullReserve();
     else if (phase === "freefall" && !reserveArmed && input.pullEdge) pullMain();
 
-    if (phase === "freefall" || (phase === "malfunction" && mal === "streamer") || (phase === "deploying" && mal === "streamer")) {
+    if (phase === "freefall" && mode === "base") {
+      baseFall(dt, input.turn, arch, dive);
+    } else if (phase === "freefall" || (phase === "malfunction" && mal === "streamer") || (phase === "deploying" && mal === "streamer")) {
       bodyYaw += input.turn * 1.25 * dt;
       const diveAmt = clamp(-bodyPitch / 1.15, 0, 1);
       let terminal = 53;
@@ -1290,7 +1438,7 @@ export function mountGame(
       vel.lerp(_v1, 1 - Math.exp(-2 * dt));
     } else if (phase === "deploying" && mal === "none") {
       openT += dt;
-      const dur = deployingReserve ? 1.45 : 2.65;
+      const dur = openDur();
       const u = smooth(openT / dur);
       if (!shockFired && openT > dur * 0.42) {
         // Slider comes down: the opening shock.
@@ -1334,8 +1482,8 @@ export function mountGame(
       brakeR += (Math.max(flareAmt, Math.max(0, -input.turn) * 0.75) - brakeR) * ease;
       const fspd = 10.5 - brake * 6.2 + drive * 3.8;
       let desc = 5.4 - brake * 3.15 + drive * 0.85;
-      if (brake && pos.y < 48) desc = Math.min(desc, 2.2);
-      if (brake && pos.y < 14) desc = Math.min(desc, 1.3);
+      if (brake && pos.y - floorY < 48) desc = Math.min(desc, 2.2);
+      if (brake && pos.y - floorY < 14) desc = Math.min(desc, 1.3);
       const fx = -Math.sin(heading);
       const fz = -Math.cos(heading);
       _v1.set(fx * fspd + WIND_X, -desc, fz * fspd + WIND_Z);
@@ -1362,7 +1510,14 @@ export function mountGame(
     shock *= Math.exp(-3.4 * dt);
     const bankTarget = -input.turn * 0.5;
     bank += (bankTarget - bank) * (1 - Math.exp(-6 * dt));
+    _prev.copy(pos);
     pos.addScaledVector(vel, dt);
+    const hit = solids.contact(_prev, pos, BODY_R);
+    if (hit) {
+      hitBuilding(hit);
+      return;
+    }
+    floorY = solids.top(pos.x, pos.z, pos.y)?.y1 ?? 0;
 
     if (pos.y <= 0 && phase !== "canopy") {
       if (phase === "deploying" && mal === "none" && deployingReserve) finishImpact("Reserve did not open in time");
@@ -1376,7 +1531,9 @@ export function mountGame(
 
     const altFt = Math.max(0, pos.y) * FT_PER_M;
     const openingGood = phase === "deploying" && mal === "none";
+    // BASE jumpers count the delay themselves: no audible altimeter.
     const inDanger =
+      mode === "skydive" &&
       (phase === "freefall" || phase === "malfunction" || (phase === "deploying" && mal !== "none")) &&
       !openingGood;
     if (inDanger && !warnedDecision && altFt <= DECISION_FT && altFt > PULL_NOW_FT) {
@@ -1401,7 +1558,7 @@ export function mountGame(
       (phase === "malfunction" && mal === "twist");
     canopy.visible = showCanopy;
     if (showCanopy) {
-      const dur = deployingReserve ? 1.45 : 2.65;
+      const dur = openDur();
       const u = phase === "deploying" ? smooth(clamp((openT - 0.3) / (dur * 0.8), 0.02, 1)) : 1;
       if (phase !== "canopy") {
         brakeL = 0;
@@ -1423,6 +1580,149 @@ export function mountGame(
         rib.rotation.z = Math.sin(simTime * 4 + i) * 0.4;
       }
     }
+  }
+
+  /** Walking a roof: steps up and down, walls stop you, and a clean drop below an edge is the exit. */
+  function walkRoof(dt: number, input: ReturnType<typeof sample>) {
+    const fx = -Math.sin(localYaw);
+    const fz = -Math.cos(localYaw);
+    const rx = Math.cos(localYaw);
+    const rz = -Math.sin(localYaw);
+    if (input.jumpEdge) runUp = true;
+    if (runUp && input.forward < -0.3) runUp = false;
+    let fwd = runUp ? 1 : input.forward;
+    let side = runUp ? 0 : input.strafe;
+    const m = Math.hypot(fwd, side);
+    if (m < 0.05) return;
+    if (m > 1) {
+      fwd /= m;
+      side /= m;
+    }
+    const running = runUp || input.run;
+    const sp = running ? RUN_MPS : WALK_MPS;
+    const vx = (rx * side + fx * fwd) * sp;
+    const vz = (rz * side + fz * fwd) * sp;
+    walk += dt * (running ? 11 : 7);
+    let low = 0;
+    const tryStep = (nx: number, nz: number) => {
+      const st = stepTo(solids, nx, nz, pos.y);
+      if (st.kind === "ok") pos.set(nx, st.y, nz);
+      else if (st.kind === "edge") {
+        pos.x = nx;
+        pos.z = nz;
+      } else if (st.kind === "ledge") low = st.drop;
+      return st.kind;
+    };
+    let got = tryStep(pos.x + vx * dt, pos.z + vz * dt);
+    // Slide along walls and ledges rather than sticking to them.
+    if ((got === "wall" || got === "ledge") && !runUp) {
+      got = tryStep(pos.x + vx * dt, pos.z);
+      if (got === "wall" || got === "ledge") got = tryStep(pos.x, pos.z + vz * dt);
+    }
+    if (got === "edge") {
+      baseExit(vx, vz, running);
+      return;
+    }
+    if (got === "ok") return;
+    if (runUp) runUp = false;
+    if (simTime > flashUntil) {
+      flashText = low
+        ? `${Math.round(low)} m DOWN TO A LOWER ROOF — JUMP FROM ANOTHER EDGE`
+        : "NO CLEAR EDGE THAT WAY";
+      flashUntil = simTime + 2.2;
+    }
+  }
+
+  /** Off the edge: a BASE exit at the speed you left with. */
+  function baseExit(vx: number, vz: number, running: boolean) {
+    const sp = Math.hypot(vx, vz) || 1;
+    // Clear of the wall you just left, so the body starts in open air.
+    for (let i = 0; i < 16 && solids.blocked(pos.x, pos.y - 1.6, pos.z, BODY_R + 0.02, 1.55); i++) {
+      pos.x += (vx / sp) * 0.05;
+      pos.z += (vz / sp) * 0.05;
+    }
+    vel.set(vx, running ? 1.6 : 0.2, vz);
+    bodyYaw = localYaw;
+    bodyPitch = clamp(localPitch, -1.35, 1.15);
+    bank = 0;
+    heading = bodyYaw;
+    jumpedFrom = roofName;
+    ranOff = running;
+    exitTime = simTime;
+    runUp = false;
+    save.jumps += 1;
+    const ft = Math.round(pos.y * FT_PER_M).toLocaleString("en-US");
+    pushLog(`Off ${roofName} at ${ft} ft · ${running ? "running exit" : "stepped off"}`);
+    phase = "freefall";
+    flying = "none";
+    persist();
+  }
+
+  /**
+   * BASE freefall. You leave at a standstill, so the fall builds from nothing, and the body
+   * only grips the air to turn or track once it is moving fast through it.
+   */
+  function baseFall(dt: number, turn: number, arch: boolean, dive: boolean) {
+    bodyYaw += turn * 1.25 * dt;
+    const diveAmt = clamp(-bodyPitch / 1.15, 0, 1);
+    let terminal = 53;
+    let h = 4 + diveAmt * 26;
+    if (arch) {
+      terminal = 46;
+      h *= 0.4;
+    }
+    if (dive) {
+      terminal = 76 + diveAmt * 16;
+      h += 10;
+    }
+    const fall = Math.max(0, -vel.y);
+    vel.y -= 9.81 * (1 - (fall / terminal) ** 2) * dt;
+    const k = 1 - Math.exp(-1.8 * Math.min(1, (fall / 40) ** 2) * dt);
+    vel.x += (-Math.sin(bodyYaw) * h + WIND_X - vel.x) * k;
+    vel.z += (-Math.cos(bodyYaw) * h + WIND_Z - vel.z) * k;
+  }
+
+  /** Coming down on a roof, or into a wall. Under canopy a roof is a landing; anything else is a crash. */
+  function hitBuilding(hit: Contact) {
+    const s = hit.solid;
+    let top = hit.top;
+    if (!top && phase === "canopy" && pos.y >= s.y1 - 1) {
+      // Caught the very edge on final: scramble up onto it.
+      pos.x = clamp(pos.x, s.x0 + 0.4, s.x1 - 0.4);
+      pos.z = clamp(pos.z, s.z0 + 0.4, s.z1 - 0.4);
+      top = true;
+    }
+    if (top) {
+      pos.y = s.y1;
+      if (phase === "canopy") finishDown(s);
+      else finishImpact(phase === "freefall" ? "Went in on a rooftop" : "No open canopy over a roof");
+      return;
+    }
+    pos.x = _prev.x;
+    pos.z = _prev.z;
+    finishImpact(phase === "canopy" ? "Flew into the side of a building" : "Hit the side of a building");
+  }
+
+  /** The closest marked roof below you, within reach of a canopy. */
+  function padBelow() {
+    let best: (typeof pads.list)[number] | null = null;
+    let bestD = 1600;
+    for (const p of pads.list) {
+      if (p.y > pos.y - 5) continue;
+      const d = Math.hypot(p.x - pos.x, p.z - pos.z);
+      if (d < bestD) [best, bestD] = [p, d];
+    }
+    return best;
+  }
+
+  function roofPrompt() {
+    if (runUp) return "RUNNING FOR THE EDGE";
+    const ahead = lookAhead(solids, pos.x, pos.y, pos.z, -Math.sin(localYaw), -Math.cos(localYaw), 6);
+    if (ahead.kind === "edge" && ahead.dist <= 1.5) {
+      return `THE EDGE · ${Math.round(ahead.drop * FT_PER_M).toLocaleString("en-US")} FT DOWN · STEP OFF`;
+    }
+    if (ahead.kind === "ledge") return "A LOWER ROOF IS RIGHT BELOW — JUMP ANOTHER WAY";
+    return coarse ? "WALK TO THE EDGE · JUMP RUNS YOU OFF" : "WALK TO THE EDGE · SPACE RUNS AND JUMPS";
   }
 
   function southboundLight(dir: THREE.Vector3) {
@@ -1466,14 +1766,14 @@ export function mountGame(
       } else if (malNow) {
         banner = "MAIN FAILED — CUT AWAY, THEN RESERVE";
         bannerLevel = altFt <= PULL_NOW_FT ? 3 : 2;
-      } else if (altFt <= HARD_DECK_FT) {
-        banner = "HARD DECK — PULL IMMEDIATELY";
+      } else if (altFt <= DECK[mode].hard) {
+        banner = mode === "base" ? "PULL!" : "HARD DECK — PULL IMMEDIATELY";
         bannerLevel = 3;
-      } else if (altFt <= PULL_NOW_FT) {
+      } else if (altFt <= DECK[mode].now) {
         banner = "PULL NOW";
         bannerLevel = 2;
-      } else if (altFt <= DECISION_FT) {
-        banner = "CRITICAL ALTITUDE — PULL";
+      } else if (altFt <= DECK[mode].pull) {
+        banner = mode === "base" ? "PULL" : "CRITICAL ALTITUDE — PULL";
         bannerLevel = 1;
       }
     }
@@ -1489,8 +1789,11 @@ export function mountGame(
         : inDoor
           ? "RED LIGHT — WAIT FOR GREEN"
           : "WALK TO THE DOOR";
+    } else if (phase === "roof") {
+      prompt = roofPrompt();
     } else if (phase === "freefall") {
-      if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
+      if (mode === "base") prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${coarse ? "TAP PULL" : "SPACE PULLS"}`;
+      else if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
       else if (docked) prompt = "DOCKED · HOLD ON UNTIL BREAK-OFF";
       else if (formation.active()) {
         formation.slot(_base);
@@ -1503,7 +1806,7 @@ export function mountGame(
         else prompt = "FACE IN TO DOCK";
       } else if (brokeOff && formation.nearest(pos) < 30) {
         prompt = "TRACK AWAY — HOLD S, THEN PULL";
-      } else prompt = "SPACE PULLS";
+      } else prompt = coarse ? "TAP PULL" : "SPACE PULLS";
     } else if (phase === "malfunction") {
       prompt = "X CUT AWAY · THEN R RESERVE";
     } else if (phase === "deploying") {
@@ -1511,8 +1814,17 @@ export function mountGame(
     } else if (phase === "canopy") {
       const facingLake = -Math.sin(heading) > 0.55;
       const dist = Math.hypot(DZ_X - pos.x, DZ_Z - pos.z);
-      if (pos.y < 260 && !facingLake) prompt = "FACE THE LAKE — LAND INTO THE WIND";
-      else if (pos.y < 40) prompt = "FLARE — HOLD S";
+      const agl = pos.y - floorY;
+      // Close over a marked roof, it is the target.
+      const pad = padBelow();
+      const padAbove = pad ? pos.y - pad.y : Infinity;
+      const onPad = pad !== null && Math.hypot(pad.x - pos.x, pad.z - pos.z) < 220 && padAbove < 260;
+      if (onPad && padAbove < 160 && !facingLake) prompt = "FACE THE LAKE — LAND INTO THE WIND";
+      else if (onPad && padAbove < 30) prompt = "FLARE — HOLD S";
+      else if (onPad) prompt = `ON FINAL · ${pad.name.toUpperCase()}`;
+      else if (agl < 260 && !facingLake) prompt = "FACE THE LAKE — LAND INTO THE WIND";
+      else if (agl < 40) prompt = "FLARE — HOLD S";
+      else if (mode === "base") prompt = "FLY THE ARROW TO OPEN GROUND";
       else if (dist > 90) prompt = "FLY THE ARROW TO THE BEACH";
       else prompt = "ON FINAL";
     }
@@ -1538,11 +1850,17 @@ export function mountGame(
         ? heading
         : phase === "cabin" || phase === "menu"
           ? planeYaw + localYaw
-          : bodyYaw;
-    const dx = DZ_X - pos.x;
-    const dz = DZ_Z - pos.z;
+          : phase === "roof"
+            ? localYaw
+            : bodyYaw;
+    // The beach on a skydive; off a building, the nearest open ground.
+    if (mode === "base") nearestOpen(pos.x, pos.z, lzPos);
+    else lzPos.set(DZ_X, 0, DZ_Z);
+    const dx = lzPos.x - pos.x;
+    const dz = lzPos.z - pos.z;
     const want = Math.atan2(-dx, -dz);
-    const rel = Math.atan2(Math.sin(want - (phase === "freefall" ? bodyYaw : heading)), Math.cos(want - (phase === "freefall" ? bodyYaw : heading)));
+    const faceYaw = phase === "roof" ? localYaw : phase === "freefall" ? bodyYaw : heading;
+    const rel = Math.atan2(Math.sin(want - faceYaw), Math.cos(want - faceYaw));
 
     camera.updateMatrixWorld();
     _v3.set(1.15, 1.25, 0.95);
@@ -1553,6 +1871,7 @@ export function mountGame(
     const facing = _v2.dot(toDoor) > 0;
     const projected = doorWorld.project(camera);
     hud.phase = phase;
+    hud.mode = mode;
     hud.altitudeFt = altFt;
     hud.fallMph = Math.max(0, -vel.y) * MPH_PER_MPS;
     hud.groundMph =
@@ -1569,36 +1888,44 @@ export function mountGame(
     hud.doorU = facing ? clamp(projected.x * 0.5 + 0.5, 0.06, 0.94) : projected.x < 0 ? 0.06 : 0.94;
     hud.doorV = facing ? clamp(-projected.y * 0.5 + 0.5, 0.12, 0.82) : 0.2;
     hud.baseVisible = false;
+    // A ring on screen around a target: the base to dock on, or a marked roof under canopy.
+    const marker = (at: THREE.Vector3, label: string) => {
+      const ahead = _v2.dot(_v1.copy(at).sub(camera.position)) > 0;
+      at.project(camera);
+      if (!ahead) at.multiplyScalar(-1);
+      hud.baseVisible = true;
+      const edge = !ahead || Math.abs(at.x) > 1 || Math.abs(at.y) > 1;
+      if (edge) {
+        // Off screen or behind: pin it to the edge on the side to turn toward.
+        const k = 1 / Math.max(Math.abs(at.x), Math.abs(at.y), 1e-3);
+        at.x *= k;
+        at.y *= k;
+      }
+      hud.baseU = clamp(at.x * 0.5 + 0.5, 0.06, 0.94);
+      hud.baseV = clamp(-at.y * 0.5 + 0.5, 0.1, 0.86);
+      hud.baseLabel = label;
+    };
     if (phase === "freefall" && formation.active() && !docked) {
       formation.center(_base);
       const dist = _base.distanceTo(camera.position);
-      if (dist > 2.6) {
-        const ahead = _v2.dot(_v1.copy(_base).sub(camera.position)) > 0;
-        _base.project(camera);
-        if (!ahead) _base.multiplyScalar(-1);
-        hud.baseVisible = true;
-        const edge = !ahead || Math.abs(_base.x) > 1 || Math.abs(_base.y) > 1;
-        if (edge) {
-          // Off screen or behind: pin it to the edge on the side to turn toward.
-          const k = 1 / Math.max(Math.abs(_base.x), Math.abs(_base.y), 1e-3);
-          _base.x *= k;
-          _base.y *= k;
-        }
-        hud.baseU = clamp(_base.x * 0.5 + 0.5, 0.06, 0.94);
-        hud.baseV = clamp(-_base.y * 0.5 + 0.5, 0.1, 0.86);
-        hud.baseLabel = `BASE ${Math.round(dist)} m`;
-      }
+      if (dist > 2.6) marker(_base, `BASE ${Math.round(dist)} m`);
+    } else if (phase === "canopy") {
+      const pad = padBelow();
+      const d = pad ? Math.hypot(pad.x - pos.x, pad.z - pos.z) : 0;
+      if (pad && d > 18) marker(_base.set(pad.x, pad.y, pad.z), `${pad.name.toUpperCase()} ${Math.round(d)} m`);
     }
-    hud.dzVisible = phase === "freefall" || phase === "canopy" || phase === "deploying" || phase === "malfunction";
+    hud.dzVisible =
+      phase === "freefall" || phase === "canopy" || phase === "deploying" || phase === "malfunction" || phase === "roof";
     hud.dzRel = THREE.MathUtils.radToDeg(rel);
     hud.dzDist = Math.hypot(dx, dz);
+    hud.dzLabel = mode === "base" ? "LZ" : "DZ";
     hud.outcome = outcome;
     hud.canopy = flying;
     hud.needsLook =
       !coarse &&
       phase !== "menu" &&
       document.pointerLockElement !== canvas;
-    if (tape.current && phase !== "menu") drawTape(tape.current, altFt);
+    if (tape.current && phase !== "menu") drawTape(tape.current, altFt, DECK[mode]);
     onFrame(hud);
   }
 
@@ -1637,6 +1964,17 @@ export function mountGame(
       _e.set(localPitch, localYaw, 0, "YXZ");
       _q.setFromEuler(_e);
       camera.quaternion.copy(plane.quaternion).multiply(_q);
+      return;
+    }
+    if (phase === "roof") {
+      const bob = reduce ? 0 : Math.sin(walk) * 0.025;
+      camera.position.set(pos.x, pos.y + STAND_EYE + bob, pos.z);
+      _e.set(localPitch, localYaw, 0, "YXZ");
+      camera.quaternion.setFromEuler(_e);
+      if (Math.abs(camera.fov - 72) > 0.25) {
+        camera.fov += (72 - camera.fov) * 0.08;
+        camera.updateProjectionMatrix();
+      }
       return;
     }
     const air = Math.hypot(vel.x, vel.y, vel.z);
@@ -1698,7 +2036,7 @@ export function mountGame(
     p.time = simTime;
     p.air = Math.hypot(vel.x, vel.y, vel.z);
     p.altFt = (phase === "cabin" ? plane.position.y : Math.max(0, pos.y)) * FT_PER_M;
-    p.flare = clamp((30 - pos.y) / 25, 0, 1);
+    p.flare = clamp((30 - (pos.y - floorY)) / 25, 0, 1);
     p.gestureT = simTime - gestureStart;
     p.gesture = gesture && p.gestureT < 1.2 ? gesture : null;
     p.reaching = phase === "deploying" || (phase === "malfunction" && mal === "twist");
@@ -1726,6 +2064,12 @@ export function mountGame(
           p.rightHand = handR.copy(right);
         }
       }
+    } else if (phase === "roof") {
+      p.mode = "cabin";
+      _v3.set(pos.x, pos.y + STAND_EYE, pos.z);
+      bodyE.set(0, localYaw, 0, "YXZ");
+      bodyQ.setFromEuler(bodyE);
+      bodyFrame.compose(_v3, bodyQ, one);
     } else if (phase === "canopy" || phase === "down") {
       p.mode = phase;
       _v3.copy(pos);
@@ -1758,7 +2102,7 @@ export function mountGame(
   /** Your shadow and the other jumpers' on the ground, once you're low enough to see them. */
   function castShadows() {
     casters.length = 0;
-    const out = phase !== "menu" && phase !== "cabin" && phase !== "impact";
+    const out = phase !== "menu" && phase !== "cabin" && phase !== "roof" && phase !== "impact";
     if (out) casters.push({ feet: pos, wing: canopy.visible ? canopy : null });
     formation.casters(casters);
     shadows.update(casters, camera.position);
@@ -1789,6 +2133,8 @@ export function mountGame(
     if (phase === "impact") audio.update(0, 0, 0);
     else if (phase === "menu") audio.update(0.02, 0.045, 20);
     else if (phase === "cabin") audio.update(inDoor ? 0.24 : 0.035, inDoor ? 0.03 : 0.11, inDoor ? 40 : 10);
+    // A steady breeze across the top of a tower.
+    else if (phase === "roof") audio.update(0.08, 0, 9);
     else if (phase === "canopy" || phase === "down") audio.update(0.045, 0, 12);
     else audio.update(clamp(air / 85, 0, 1) * 0.36, 0, air);
   }
@@ -1799,13 +2145,12 @@ export function mountGame(
   function loop() {
     timer.update();
     const frameDt = Math.min(timer.getDelta(), 0.05);
-    if (bridge.command === "start" && phase === "menu") {
-      bridge.command = null;
-      begin();
-    } else if (bridge.command === "again") {
-      bridge.command = null;
-      backToMenu();
-    }
+    const command = bridge.command;
+    bridge.command = null;
+    if (command === "start" && phase === "menu") begin();
+    else if (command === "again") backToMenu();
+    else if (command === "retry") begin();
+    else if (command === "base") baseFromHere();
     lastInput = sample();
     acc += frameDt;
     let guard = 0;
@@ -1962,6 +2307,8 @@ export function mountGame(
     inDoor: () => inDoor,
     getLocalX: () => riderX,
     isDocked: () => docked,
+    getPos: () => [pos.x, pos.y, pos.z],
+    getOutcome: () => outcome,
     addLook: (dx: number, dy: number) => {
       lookDX += dx;
       lookDY += dy;
@@ -2075,6 +2422,8 @@ declare global {
       inDoor?: () => boolean;
       getLocalX?: () => number;
       isDocked?: () => boolean;
+      getPos?: () => number[];
+      getOutcome?: () => unknown;
       addLook?: (dx: number, dy: number) => void;
     };
   }

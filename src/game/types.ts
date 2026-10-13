@@ -1,9 +1,18 @@
 /** Time of day. */
 export type Light = "day" | "golden" | "dusk";
 
+/** How you get up there: the Twin Otter, or the stairs to a marked rooftop. */
+export type Ride = "plane" | "roof";
+export type PadId = "southloop" | "aqua" | "aon" | "willis";
+/** A skydive from the plane, or a BASE jump off a roof. */
+export type JumpMode = "skydive" | "base";
+/** Where a jump came down. */
+export type Area = "beach" | "park" | "street" | "roof" | "water" | "none";
+
 export type Phase =
   | "menu"
   | "cabin"
+  | "roof"
   | "freefall"
   | "deploying"
   | "malfunction"
@@ -25,6 +34,17 @@ export type JumpScore = {
 
 export type Outcome = {
   kind: "landed" | "water" | "impact";
+  mode: JumpMode;
+  area: Area;
+  /** The roof you came down on: a marked pad's name, or a plain description. */
+  roof: string | null;
+  /** Meters from the center of the pad's target, on a marked roof. */
+  padM: number | null;
+  /** Standing somewhere tall enough, with an open edge, to BASE jump from. */
+  canBase: boolean;
+  /** BASE: the roof you left, and seconds from the exit to the pull. */
+  from: string | null;
+  delayS: number | null;
   distanceM: number;
   usedReserve: boolean;
   redLight: boolean;
@@ -45,6 +65,8 @@ export type Save = {
   altitudeFt: number;
   malPct: number;
   light: Light;
+  ride: Ride;
+  roof: PadId;
 };
 
 export type Bridge = {
@@ -52,8 +74,11 @@ export type Bridge = {
   light: Light;
   altitudeFt: number;
   malChance: number;
+  ride: Ride;
+  roof: PadId;
   muted: boolean;
-  command: "start" | "again" | null;
+  /** Start from the menu, back to the menu, the same jump again, or BASE off the roof you landed on. */
+  command: "start" | "again" | "retry" | "base" | null;
   moveX: number;
   moveY: number;
   lookX: number;
@@ -67,6 +92,7 @@ export type Bridge = {
 
 export type Hud = {
   phase: Phase;
+  mode: JumpMode;
   altitudeFt: number;
   fallMph: number;
   groundMph: number;
@@ -81,13 +107,15 @@ export type Hud = {
   doorU: number;
   doorV: number;
   doorVisible: boolean;
-  /** Screen position of the base during formation freefall, 0..1 like the door marker. */
+  /** Screen position of the base during formation freefall, or of a rooftop pad under canopy, 0..1 like the door marker. */
   baseU: number;
   baseV: number;
   baseVisible: boolean;
   baseLabel: string;
   dzRel: number;
   dzDist: number;
+  /** DZ for the beach; LZ for the nearest open ground on a BASE jump. */
+  dzLabel: string;
   dzVisible: boolean;
   outcome: Outcome | null;
   canopy: "none" | "main" | "reserve";
@@ -100,6 +128,8 @@ export function createBridge(): Bridge {
     light: "day",
     altitudeFt: 12500,
     malChance: 0.15,
+    ride: "plane",
+    roof: "southloop",
     muted: false,
     command: null,
     moveX: 0,

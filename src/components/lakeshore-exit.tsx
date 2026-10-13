@@ -1,25 +1,32 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clsx } from "clsx";
-import { AlertTriangle, Plane, RotateCcw, Star, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Building2, Plane, RotateCcw, Star, Volume2, VolumeX } from "lucide-react";
 import { cardinal, describeOutcome } from "@/game/grade";
 import { loadSave, writeSave } from "@/game/save";
 import {
+  BASE_HARD_FT,
+  BASE_PULL_FT,
   DECISION_FT,
   DEFAULT_EXIT_FT,
+  FT_PER_M,
   DEFAULT_MAL_PCT,
   HARD_DECK_FT,
   LIGHTS,
   MAX_EXIT_FT,
   MIN_EXIT_FT,
+  PADS,
 } from "@/game/constants";
 import {
   createBridge,
   type Bridge,
   type Hud,
+  type JumpMode,
   type JumpScore,
   type Light,
   type Outcome,
+  type PadId,
   type Phase,
+  type Ride,
 } from "@/game/types";
 
 const LIGHT_LABEL: Record<Light, string> = { day: "Midday", golden: "Golden hour", dusk: "Dusk" };
@@ -53,6 +60,7 @@ export function LakeshoreExit() {
   const spotRef = useRef<HTMLDivElement>(null);
   const dzRef = useRef<HTMLDivElement>(null);
   const dzArrowRef = useRef<HTMLDivElement>(null);
+  const dzLabelRef = useRef<HTMLSpanElement>(null);
   const doorRef = useRef<HTMLDivElement>(null);
   const baseRef = useRef<HTMLDivElement>(null);
   const baseLabelRef = useRef<HTMLDivElement>(null);
@@ -62,6 +70,9 @@ export function LakeshoreExit() {
   const onFrame = useRef<(hud: Hud) => void>(() => {});
 
   const [phase, setPhase] = useState<Phase>("menu");
+  const [mode, setMode] = useState<JumpMode>("skydive");
+  const [ride, setRide] = useState<Ride>("plane");
+  const [roof, setRoof] = useState<PadId>("southloop");
   const [banner, setBanner] = useState("");
   const [bannerLevel, setBannerLevel] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -77,6 +88,7 @@ export function LakeshoreExit() {
 
   const cache = useRef({
     phase: "menu" as Phase,
+    mode: "skydive" as JumpMode,
     banner: "",
     level: 0,
     prompt: "",
@@ -99,6 +111,7 @@ export function LakeshoreExit() {
     if (spotRef.current) spotRef.current.textContent = hud.spot;
     if (poseRef.current) poseRef.current.textContent = hud.pose;
     if (dzRef.current) dzRef.current.textContent = `${Math.round(hud.dzDist)} m`;
+    if (dzLabelRef.current) dzLabelRef.current.textContent = hud.dzLabel;
     if (dzArrowRef.current) dzArrowRef.current.style.transform = `rotate(${-hud.dzRel}deg)`;
     if (doorRef.current) {
       doorRef.current.style.opacity = hud.doorVisible ? "1" : "0";
@@ -120,6 +133,10 @@ export function LakeshoreExit() {
     if (c.phase !== hud.phase) {
       c.phase = hud.phase;
       setPhase(hud.phase);
+    }
+    if (c.mode !== hud.mode) {
+      c.mode = hud.mode;
+      setMode(hud.mode);
     }
     if (c.banner !== hud.banner) {
       c.banner = hud.banner;
@@ -161,8 +178,12 @@ export function LakeshoreExit() {
     const mal = Math.min(40, Math.max(0, saved.malPct));
     bridgeRef.current.altitudeFt = alt;
     bridgeRef.current.malChance = mal / 100;
+    bridgeRef.current.ride = saved.ride;
+    bridgeRef.current.roof = saved.roof;
     setAltitudeFt(alt);
     setMalPct(mal);
+    setRide(saved.ride);
+    setRoof(saved.roof);
     setRecord({ bestM: saved.bestM, bestScore: saved.bestScore, jumps: saved.jumps, rides: saved.rides });
     setLight(saved.light);
   }, []);
@@ -190,6 +211,7 @@ export function LakeshoreExit() {
 
   const bridge = bridgeRef.current;
   const air = phase === "freefall" || phase === "deploying" || phase === "malfunction" || phase === "canopy";
+  const base = mode === "base";
   const showHud = phase !== "menu" && !outcome;
   const copy = outcome ? describeOutcome(outcome) : null;
   const jumpPulse = holdPulse((v) => {
@@ -204,6 +226,14 @@ export function LakeshoreExit() {
   const reservePulse = holdPulse((v) => {
     bridge.reserve = v;
   });
+  const choose = (r: Ride, pad: PadId) => {
+    bridge.ride = r;
+    bridge.roof = pad;
+    setRide(r);
+    setRoof(pad);
+    writeSave({ ...loadSave(), ride: r, roof: pad });
+  };
+  const fromRoof = ride === "roof";
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-ink text-fg">
@@ -259,7 +289,17 @@ export function LakeshoreExit() {
 
           <div className="absolute top-4 right-4 text-right">
             <div className="font-display text-xs tracking-widest text-muted">
-              {canopy === "reserve" ? "RESERVE" : canopy === "main" ? "MAIN" : phase === "cabin" ? "CABIN" : "FREEFALL"}
+              {canopy === "reserve"
+                ? "RESERVE"
+                : canopy === "main"
+                  ? "MAIN"
+                  : phase === "cabin"
+                    ? "CABIN"
+                    : phase === "roof"
+                      ? "ROOF"
+                      : base
+                        ? "BASE"
+                        : "FREEFALL"}
             </div>
             <div className="mt-2 font-display text-sm text-muted">
               FALL <span ref={fallRef} className="text-fg tabular-nums" /> MPH
@@ -284,10 +324,12 @@ export function LakeshoreExit() {
                 className="font-display text-5xl leading-none tabular-nums short:text-4xl desk:text-7xl"
               />
               <div className="mt-1 font-display text-sm tracking-widest text-muted">FT AGL</div>
-              {air ? (
+              {air || phase === "roof" ? (
                 <p className="mt-2 max-w-44 font-display text-sm leading-tight text-amber short:hidden">
-                  Critical pull {commas(DECISION_FT)}
-                  <span className="mt-1 block text-signal">Hard deck {commas(HARD_DECK_FT)}</span>
+                  {base ? `Pull by ${commas(BASE_PULL_FT)}` : `Critical pull ${commas(DECISION_FT)}`}
+                  <span className="mt-1 block text-signal">
+                    {base ? `Too low ${commas(BASE_HARD_FT)}` : `Hard deck ${commas(HARD_DECK_FT)}`}
+                  </span>
                 </p>
               ) : null}
             </div>
@@ -305,7 +347,7 @@ export function LakeshoreExit() {
           <div
             className={clsx(
               "absolute top-42 left-1/2 -translate-x-1/2 items-center gap-2 rounded-md bg-panel/70 py-1 pr-3 pl-1 desk:top-auto desk:bottom-36 desk:bg-transparent desk:p-0",
-              air ? "flex" : "hidden",
+              air || phase === "roof" ? "flex" : "hidden",
             )}
           >
             <div ref={dzArrowRef} className="grid size-8 place-items-center text-amber">
@@ -314,15 +356,19 @@ export function LakeshoreExit() {
               </svg>
             </div>
             <div className="font-display text-lg tabular-nums">
-              DZ <span ref={dzRef} />
+              <span ref={dzLabelRef}>DZ</span> <span ref={dzRef} />
             </div>
           </div>
 
           <p className="absolute right-4 bottom-4 hidden max-w-xs text-right text-sm text-muted desk:block">
             {phase === "cabin"
               ? "WASD walk · mouse look · run out the door on green"
-              : phase === "freefall"
-                ? "A/D turn · W arch · S dive · space pulls"
+              : phase === "roof"
+                ? "WASD walk · shift runs · step off an edge, or space to run and jump"
+                : phase === "freefall"
+                ? base
+                  ? "A/D turn · W arch · S dive · space pulls · count your delay"
+                  : "A/D turn · W arch · S dive · space pulls"
                 : phase === "malfunction"
                   ? "X cut away · R reserve"
                   : phase === "canopy"
@@ -345,7 +391,7 @@ export function LakeshoreExit() {
             />
           </div>
           <div className="touch-ui pointer-events-auto absolute right-4 bottom-4 flex flex-col gap-2">
-            {phase === "cabin" ? (
+            {phase === "cabin" || phase === "roof" ? (
               <TouchButton label="JUMP" onDown={jumpPulse.down} onUp={jumpPulse.up} />
             ) : null}
             {phase === "freefall" ? (
@@ -392,14 +438,73 @@ export function LakeshoreExit() {
         <aside className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 max-h-[86dvh] overflow-y-auto p-3 md:inset-y-0 md:left-0 md:w-[26rem] md:max-h-none md:p-6">
           <div className="rounded-2xl border border-line bg-panel/90 p-5 backdrop-blur-md">
             <div className="flex items-center gap-2 text-amber">
-              <Plane className="size-5" aria-hidden="true" />
-              <p className="font-display text-sm tracking-[0.22em]">TWIN OTTER · CHICAGO</p>
+              {fromRoof ? (
+                <Building2 className="size-5" aria-hidden="true" />
+              ) : (
+                <Plane className="size-5" aria-hidden="true" />
+              )}
+              <p className="font-display text-sm tracking-[0.22em]">
+                {fromRoof ? "ROOFTOP BASE · CHICAGO" : "TWIN OTTER · CHICAGO"}
+              </p>
             </div>
             <h1 className="mt-2 font-display text-5xl leading-none font-semibold tracking-wide">Lakeshore Exit</h1>
             <p className="mt-3 text-sm leading-relaxed text-muted">
-              Look around the cabin, walk to the door, and leave over Lake Michigan. The beach is west. The breeze is off the lake.
+              {fromRoof
+                ? "Stand on top of a Chicago tower, walk to the edge and jump. You get seconds, not minutes, before the pull."
+                : "Look around the cabin, walk to the door, and leave over Lake Michigan. The beach is west. The breeze is off the lake."}
             </p>
 
+            <div className="mt-4" role="radiogroup" aria-labelledby="ride-label">
+              <span id="ride-label" className="block font-display text-lg tracking-wide">
+                Jump from
+              </span>
+              <div className="mt-1.5 grid grid-cols-2 gap-2">
+                {(["plane", "roof"] as const).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    role="radio"
+                    aria-checked={ride === r}
+                    className={clsx(
+                      "flex h-10 items-center justify-center gap-2 rounded-md border font-display text-base tracking-wide",
+                      ride === r ? "border-amber bg-amber text-ink" : "border-line bg-ink/60 text-fg",
+                    )}
+                    onClick={() => choose(r, roof)}
+                  >
+                    {r === "plane" ? (
+                      <Plane className="size-4" aria-hidden="true" />
+                    ) : (
+                      <Building2 className="size-4" aria-hidden="true" />
+                    )}
+                    {r === "plane" ? "The plane" : "A rooftop"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {fromRoof ? (
+              <div className="mt-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Rooftop">
+                {PADS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={roof === p.id}
+                    className={clsx(
+                      "rounded-md border px-2.5 py-1.5 text-left",
+                      roof === p.id ? "border-amber bg-amber/15" : "border-line bg-ink/60",
+                    )}
+                    onClick={() => choose("roof", p.id)}
+                  >
+                    <span className="block font-display text-base leading-tight tracking-wide">{p.name}</span>
+                    <span className="block text-xs tabular-nums text-muted">{commas(p.heightM * FT_PER_M)} ft up</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {fromRoof ? null : (
+              <>
             <label className="mt-5 block" htmlFor="exit-alt">
               <span className="flex items-baseline justify-between font-display text-lg tracking-wide">
                 Exit altitude
@@ -443,6 +548,8 @@ export function LakeshoreExit() {
               />
               <span className="text-xs text-muted">If it fails: cut away, then reserve. You will not have long.</span>
             </label>
+              </>
+            )}
 
             <div className="mt-3" role="radiogroup" aria-labelledby="light-label">
               <span id="light-label" className="block font-display text-lg tracking-wide">
@@ -474,10 +581,21 @@ export function LakeshoreExit() {
             <div className="mt-5 flex gap-3 rounded-lg border border-line bg-ink/60 p-3">
               <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber" aria-hidden="true" />
               <div className="text-sm leading-relaxed">
-                <p className="font-display text-lg tracking-wide text-amber">Critical altitude {commas(DECISION_FT)} ft</p>
-                <p className="mt-1 text-muted">
-                  The altimeter yells if you pass it still in freefall. Pull there. Hard deck {commas(HARD_DECK_FT)} ft.
-                </p>
+                {fromRoof ? (
+                  <>
+                    <p className="font-display text-lg tracking-wide text-amber">Pull by {commas(BASE_PULL_FT)} ft</p>
+                    <p className="mt-1 text-muted">
+                      No reserve and no altimeter alarm off a building. Count your delay, pull, and fly to the nearest park.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-display text-lg tracking-wide text-amber">Critical altitude {commas(DECISION_FT)} ft</p>
+                    <p className="mt-1 text-muted">
+                      The altimeter yells if you pass it still in freefall. Pull there. Hard deck {commas(HARD_DECK_FT)} ft.
+                    </p>
+                  </>
+                )}
               </div>
             </div>
 
@@ -488,7 +606,7 @@ export function LakeshoreExit() {
                 bridge.command = "start";
               }}
             >
-              Start the jump
+              {fromRoof ? "Go to the roof" : "Start the jump"}
             </button>
             {bootError ? <p className="mt-3 text-sm text-signal">{bootError}</p> : null}
             {record.jumps > 0 ? (
@@ -500,9 +618,19 @@ export function LakeshoreExit() {
             ) : null}
 
             <ul className="mt-4 space-y-1 text-sm text-muted">
-              <li>Cabin: look around and walk to the door. On the green light the bar lifts: run out.</li>
-              <li>Freefall: A and D turn, W arches, S dives, space pulls.</li>
-              <li>Canopy: A and D turn, S flares. Land facing the lake, into the wind.</li>
+              {fromRoof ? (
+                <>
+                  <li>Roof: WASD walks, shift runs. Step off an edge, or press space to run and jump.</li>
+                  <li>Freefall: you start from a standstill, so speed builds slowly. Space pulls.</li>
+                  <li>Canopy: it opens in about a second. Fly the arrow to open ground and land facing the lake.</li>
+                </>
+              ) : (
+                <>
+                  <li>Cabin: look around and walk to the door. On the green light the bar lifts: run out.</li>
+                  <li>Freefall: A and D turn, W arches, S dives, space pulls.</li>
+                  <li>Canopy: A and D turn, S flares. Land facing the lake, into the wind. The marked rooftops count too.</li>
+                </>
+              )}
             </ul>
           </div>
         </aside>
@@ -532,16 +660,42 @@ export function LakeshoreExit() {
                 ))}
               </ol>
             </details>
-            <button
-              type="button"
-              className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-amber font-display text-xl tracking-widest text-ink"
-              onClick={() => {
-                bridge.command = "again";
-              }}
-            >
-              <RotateCcw className="size-5" aria-hidden="true" />
-              Back to the manifest
-            </button>
+            {outcome.canBase ? (
+              <button
+                type="button"
+                className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-amber font-display text-xl tracking-widest text-ink"
+                onClick={() => {
+                  bridge.command = "base";
+                }}
+              >
+                <Building2 className="size-5" aria-hidden="true" />
+                BASE jump off {outcome.roof === "a rooftop" || !outcome.roof ? "this roof" : outcome.roof}
+              </button>
+            ) : null}
+            <div className={clsx("grid grid-cols-2 gap-2", outcome.canBase ? "mt-2" : "mt-5")}>
+              <button
+                type="button"
+                className={clsx(
+                  "flex h-12 items-center justify-center gap-2 rounded-md font-display text-lg tracking-widest",
+                  outcome.canBase ? "border border-line bg-ink/60 text-fg" : "bg-amber text-ink",
+                )}
+                onClick={() => {
+                  bridge.command = "retry";
+                }}
+              >
+                <RotateCcw className="size-5" aria-hidden="true" />
+                Jump again
+              </button>
+              <button
+                type="button"
+                className="h-12 rounded-md border border-line bg-ink/60 font-display text-lg tracking-widest text-fg"
+                onClick={() => {
+                  bridge.command = "again";
+                }}
+              >
+                Manifest
+              </button>
+            </div>
           </section>
         </div>
       ) : null}
