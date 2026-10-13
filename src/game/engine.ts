@@ -26,7 +26,7 @@ import { scoreJump } from "./score";
 import { createShadows, type ShadowCaster } from "./shadow";
 import { createStreaks } from "./streaks";
 import { CITY, createSkyline } from "./skyline";
-import { SUN_DIR, cityTexture, createAtmosphere, createWaterMaterial } from "./world";
+import { SUN_DIR, applyLight, cityTexture, createAtmosphere, createWaterMaterial, streetLights } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
 
@@ -288,13 +288,15 @@ export function mountGame(
   renderer.setSize(canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  // The time of day sets the sun, sky and haze that everything below is built with.
+  const look = applyLight(bridge.light);
+  renderer.toneMappingExposure = look.exposure;
 
   const scene = new THREE.Scene();
   const atmo = createAtmosphere(renderer);
   scene.background = atmo.fog.clone();
   scene.environment = atmo.envMap;
-  scene.environmentIntensity = 0.85;
+  scene.environmentIntensity = look.env;
   const fog = new THREE.Fog(atmo.fog.clone(), 400, 14000);
   scene.fog = fog;
   const camera = new THREE.PerspectiveCamera(72, 1, 0.12, 45000);
@@ -305,8 +307,8 @@ export function mountGame(
   const audio = createAudio();
   const save = loadSave();
 
-  scene.add(new THREE.HemisphereLight("#cfe0f0", "#5d6650", 0.35));
-  const sun = new THREE.DirectionalLight("#fff1dc", 2.6);
+  scene.add(new THREE.HemisphereLight(look.hemiSky, look.hemiGround, look.hemiIntensity));
+  const sun = new THREE.DirectionalLight(look.sunColor, look.sunIntensity);
   sun.position.copy(SUN_DIR).multiplyScalar(1000);
   scene.add(sun);
 
@@ -324,6 +326,15 @@ export function mountGame(
   if (farMap) farMap.repeat.set(1, 1);
 
   const cityMat = new THREE.MeshStandardMaterial({ map: cityMap ?? undefined, color: "#d9dcdf", roughness: 0.95 });
+  // After sundown the street grid lights up under the city.
+  const streetGlow = look.streets > 0 ? streetLights(8, aniso) : null;
+  const farGlow = streetGlow?.clone() ?? null;
+  if (streetGlow) {
+    streetGlow.repeat.copy(cityMap?.repeat ?? new THREE.Vector2(cityW / 820, cityD / 820));
+    cityMat.emissive.set("#ffffff");
+    cityMat.emissiveMap = streetGlow;
+    cityMat.emissiveIntensity = look.streets;
+  }
   const sandMat = new THREE.MeshStandardMaterial({ map: sandMap ?? undefined, color: "#e6d3aa", roughness: 1 });
   const grassMat = new THREE.MeshStandardMaterial({ color: "#3f7a4a", roughness: 1 });
   const roadMat = new THREE.MeshStandardMaterial({ map: roadMap ?? undefined, color: "#2c333a", roughness: 0.9 });
@@ -354,7 +365,14 @@ export function mountGame(
   for (let i = 0; i < farUv.count; i++) farUv.setXY(i, farPos.getX(i) / 1400, -farPos.getZ(i) / 1400);
   const farLand = new THREE.Mesh(
     farGeo,
-    new THREE.MeshStandardMaterial({ map: farMap ?? undefined, color: "#c9cdc8", roughness: 1 }),
+    new THREE.MeshStandardMaterial({
+      map: farMap ?? undefined,
+      color: "#c9cdc8",
+      roughness: 1,
+      emissive: farGlow ? "#ffffff" : "#000000",
+      emissiveMap: farGlow,
+      emissiveIntensity: look.streets * 0.8,
+    }),
   );
   farLand.frustumCulled = false;
   scene.add(farLand);
@@ -371,7 +389,7 @@ export function mountGame(
   road.frustumCulled = false;
   scene.add(road);
 
-  const skyline = createSkyline(scene, { aniso, coarse, onTop });
+  const skyline = createSkyline(scene, { aniso, coarse, onTop, windows: look.windows, streets: look.streets });
 
   const verge = new THREE.Mesh(groundGeo(-10, 30, -WORLD, WORLD, 0.09), onTop(grassMat.clone(), 2));
   verge.frustumCulled = false;

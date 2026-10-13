@@ -20,6 +20,7 @@ The dev server listens on port 8080.
 ## Jump
 
 - Exit altitude 8,000–20,000 ft. Malfunction chance 0–40%.
+- Time of day: Midday, Golden hour or Dusk. At golden hour the sun sets behind the skyline; at dusk the windows, streets, Lake Shore Drive, Buckingham Fountain and the Navy Pier wheel light up. The presets live in `src/game/world.ts`.
 - Cabin: mouse look, WASD to walk. The bar across the door lifts on the green light; run out the door to jump. The timer to green sits in the middle of the screen.
 - Freefall: mouse is body attitude. A/D turn, W arches, S dives.
 - Two jumpers leave just ahead of you and build a base with a slot open for you. Fly to the BASE marker and face in to dock. At 5,500 ft everyone breaks off: turn away, track, and get clear before you pull.

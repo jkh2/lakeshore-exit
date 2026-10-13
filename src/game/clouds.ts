@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RUN_X } from "./constants";
-import { HAZE_SRGB, SUN_DIR, rng, valueNoise } from "./world";
+import { HAZE_SRGB, SUN_DIR, TINT, rng, valueNoise } from "./world";
 
 // A scattered deck of cumulus built from soft, camera-facing puffs. From the plane it is a
 // field of clouds below; in freefall you fall past and through them. Inside one, a veil
@@ -188,6 +188,8 @@ export function createCloudField(scene: THREE.Scene, detail = 1): CloudField {
     uTex: { value: tex },
     uSun: { value: SUN_DIR.clone() },
     uFogColor: { value: HAZE_SRGB.clone() },
+    uLit: { value: TINT.cloudLit.clone() },
+    uShade: { value: TINT.cloudShade.clone() },
     uFogNear: { value: 500 },
     uFogFar: { value: 16000 },
   };
@@ -224,7 +226,7 @@ export function createCloudField(scene: THREE.Scene, detail = 1): CloudField {
         vDist = length(mv.xyz);
         gl_Position = projectionMatrix * mv;
       }`,
-    fragmentShader: `uniform sampler2D uTex; uniform vec3 uFogColor; uniform float uFogNear; uniform float uFogFar;
+    fragmentShader: `uniform sampler2D uTex; uniform vec3 uFogColor; uniform vec3 uLit; uniform vec3 uShade; uniform float uFogNear; uniform float uFogFar;
       varying vec2 vUv; varying vec2 vDir; varying vec2 vSun; varying float vLight;
       varying float vAlpha; varying float vWorldY; varying float vBase; varying float vDist;
       void main(){
@@ -232,7 +234,7 @@ export function createCloudField(scene: THREE.Scene, detail = 1): CloudField {
         float a = t.a * vAlpha * smoothstep(vBase - 4.0, vBase + 26.0, vWorldY);
         if (a < 0.004) discard;
         float lit = clamp(vLight + 0.24 * dot(vDir, vSun) + (t.r - 0.5) * 0.3, 0.0, 1.0);
-        vec3 col = mix(vec3(0.42, 0.48, 0.58), vec3(1.1, 1.06, 1.0), lit);
+        vec3 col = mix(uShade, uLit, lit);
         gl_FragColor = vec4(col, a);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -246,7 +248,9 @@ export function createCloudField(scene: THREE.Scene, detail = 1): CloudField {
 
   // The veil: a quad just past arm's length, brighter at the top like light through cloud.
   const veilGeo = new THREE.PlaneGeometry(1, 1);
-  const veilColors = [0.93, 0.95, 0.97, 0.93, 0.95, 0.97, 0.74, 0.78, 0.83, 0.74, 0.78, 0.83];
+  const veilColors = [0.93, 0.95, 0.97, 0.93, 0.95, 0.97, 0.74, 0.78, 0.83, 0.74, 0.78, 0.83].map(
+    (v, i) => v * TINT.veil.getComponent(i % 3),
+  );
   veilGeo.setAttribute("color", new THREE.Float32BufferAttribute(veilColors, 3));
   const veilMat = new THREE.MeshBasicMaterial({
     vertexColors: true,

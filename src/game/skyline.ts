@@ -65,6 +65,47 @@ function facadeTex(seed: number, aniso: number, paint: Painter) {
   return tex;
 }
 
+type Rect4 = readonly [number, number, number, number];
+
+/** Where the glass is in one 32 px bay of a facade tile: x, y, width, height. */
+const PANE: Rect4 = [6, 4, 20, 20];
+const FIN_PANE: Rect4 = [19, 3, 11, 26];
+const BAND_PANE: Rect4 = [2, 3, 28, 17];
+
+/**
+ * Lit offices for an emissive map: eight bays by eight floors, so the pattern repeats every
+ * 24 m by 32 m. Some floors burn bright end to end; most are a scatter of lit rooms.
+ */
+function litWindows(seed: number, aniso: number, pane: Rect4) {
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 256;
+  const g = c.getContext("2d");
+  if (g) {
+    const r = rng(seed + 100);
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, 256, 256);
+    for (let row = 0; row < 8; row++) {
+      const share = r() < 0.18 ? 0.9 : 0.1 + r() * 0.35;
+      for (let col = 0; col < 8; col++) {
+        if (r() > share) continue;
+        const k = r();
+        g.fillStyle = k < 0.55 ? "#ffcf8f" : k < 0.85 ? "#fff0d6" : "#d6e6ff";
+        g.globalAlpha = 0.55 + r() * 0.45;
+        g.fillRect(col * 32 + pane[0], row * 32 + pane[1], pane[2], pane[3]);
+      }
+    }
+    g.globalAlpha = 1;
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1 / (TILE_W * 2), 1 / (TILE_H * 2));
+  tex.anisotropy = aniso;
+  return tex;
+}
+
 const tint = (hex: string, k: number) => new THREE.Color(hex).multiplyScalar(k).getStyle();
 
 /** Glass curtain wall: panes, a spandrel band per floor and mullions between bays. */
@@ -237,17 +278,24 @@ function stack(
   return y;
 }
 
-function makeSkins(aniso: number) {
+function makeSkins(aniso: number, glow: number) {
   const roof = new THREE.MeshStandardMaterial({ color: "#5d6266", roughness: 0.92 });
+  // Offices light up as the sun goes down; by day the towers keep their plain glass.
+  const lit = (seed: number, pane: Rect4): THREE.MeshStandardMaterialParameters =>
+    glow > 0
+      ? { emissive: "#ffffff", emissiveMap: litWindows(seed, aniso, pane), emissiveIntensity: glow }
+      : {};
   const glassSkin = (
     seed: number,
     paint: Painter,
     opts: THREE.MeshStandardMaterialParameters = {},
+    pane = PANE,
   ): Skin => ({
     wall: new THREE.MeshStandardMaterial({
       map: facadeTex(seed, aniso, paint),
       roughness: 0.22,
       metalness: 0.62,
+      ...lit(seed, pane),
       ...opts,
     }),
     roof,
@@ -256,10 +304,12 @@ function makeSkins(aniso: number) {
     seed: number,
     paint: Painter,
     opts: THREE.MeshStandardMaterialParameters = {},
+    pane = PANE,
   ): Skin => ({
     wall: new THREE.MeshStandardMaterial({
       map: facadeTex(seed, aniso, paint),
       roughness: 0.78,
+      ...lit(seed, pane),
       ...opts,
     }),
     roof,
@@ -278,14 +328,19 @@ function makeSkins(aniso: number) {
       metalness: 0.75,
       roughness: 0.14,
     }),
-    aon: stoneSkin(4, fins("#e9e7e2", "#3a434b"), { roughness: 0.62 }),
+    aon: stoneSkin(4, fins("#e9e7e2", "#3a434b"), { roughness: 0.62 }, FIN_PANE),
     regis: glassSkin(5, curtain("#5f9fae", "#c9dde1", "#4b7f8b", 0.12), {
       metalness: 0.72,
       roughness: 0.14,
     }),
     pru: stoneSkin(6, punched("#b9a99e", "#3d434a")),
-    aqua: glassSkin(7, bands("#5e8ea6", "#f2f3f1", 5), { metalness: 0.3, roughness: 0.4 }),
-    marina: stoneSkin(8, bands("#2a3138", "#efeee8", 3), { roughness: 0.6 }),
+    aqua: glassSkin(
+      7,
+      bands("#5e8ea6", "#f2f3f1", 5),
+      { metalness: 0.3, roughness: 0.4 },
+      BAND_PANE,
+    ),
+    marina: stoneSkin(8, bands("#2a3138", "#efeee8", 3), { roughness: 0.6 }, BAND_PANE),
     bronze: glassSkin(9, curtain("#3a2e24", "#1a1612", "#2a221c", 0.25), {
       metalness: 0.65,
       roughness: 0.2,
@@ -294,7 +349,7 @@ function makeSkins(aniso: number) {
     limestone: stoneSkin(11, punched("#d6cbb6", "#3e444a")),
     pink: stoneSkin(12, punched("#c19a8c", "#30363d")),
     brown: stoneSkin(13, punched("#6f5047", "#22272d")),
-    granite: stoneSkin(14, fins("#8d9aa4", "#2d363f"), { roughness: 0.55 }),
+    granite: stoneSkin(14, fins("#8d9aa4", "#2d363f"), { roughness: 0.55 }, FIN_PANE),
     green: glassSkin(15, curtain("#5f9a86", "#cfe0d8", "#4a7a6b", 0.1), {
       metalness: 0.7,
       roughness: 0.12,
@@ -309,7 +364,7 @@ function makeSkins(aniso: number) {
     lantern: new THREE.MeshStandardMaterial({
       color: "#f4f7fa",
       emissive: new THREE.Color("#fff3df"),
-      emissiveIntensity: 0.6,
+      emissiveIntensity: 0.6 + glow * 0.8,
       roughness: 0.2,
     }),
   };
@@ -716,10 +771,18 @@ export type Skyline = { update: (dt: number) => void };
 
 export function createSkyline(
   scene: THREE.Scene,
-  opts: { aniso: number; coarse: boolean; onTop: (m: THREE.Material, k: number) => THREE.Material },
+  opts: {
+    aniso: number;
+    coarse: boolean;
+    onTop: (m: THREE.Material, k: number) => THREE.Material;
+    /** How bright lit windows burn, and how far the evening has gone toward streetlights (0 by day). */
+    windows: number;
+    streets: number;
+  },
 ): Skyline {
-  const { aniso, coarse, onTop } = opts;
-  const skins = makeSkins(aniso);
+  const { aniso, coarse, onTop, windows, streets } = opts;
+  // Landmarks only light up once the sun is low; ordinary blocks always show a few lit rooms.
+  const skins = makeSkins(aniso, windows > 0.5 ? windows * 0.8 : 0);
   const root = new THREE.Group();
   root.name = "skyline";
   scene.add(root);
@@ -823,7 +886,7 @@ export function createSkyline(
       onTop(roadMat(), 2),
     ),
   );
-  buckingham(root, fountain.x, fountain.z, onTop);
+  buckingham(root, fountain.x, fountain.z, onTop, streets);
   // North of Museum Campus the lakefront is lawn behind a seawall, not beach.
   const seawall = onTop(new THREE.MeshStandardMaterial({ color: "#b3b0a6", roughness: 0.9 }), 2.6);
   for (const r of LAKEFRONT) {
@@ -878,11 +941,12 @@ export function createSkyline(
   root.add(crowns);
 
   museumCampus(root, onTop);
-  const wheel = navyPier(root);
+  const wheel = navyPier(root, streets);
+  if (streets > 0) driveLamps(root);
   harbor(root, coarse);
 
   // City blocks: one instanced mesh of boxes on the ground texture's street grid.
-  const city = cityBlocks(occupied, nearRiver, coarse ? 1500 : 2600, aniso);
+  const city = cityBlocks(occupied, nearRiver, coarse ? 1500 : 2600, aniso, windows);
   root.add(city);
 
   bake(root);
@@ -1012,6 +1076,7 @@ function buckingham(
   x: number,
   z: number,
   onTop: (m: THREE.Material, k: number) => THREE.Material,
+  night: number,
 ) {
   const pool = new THREE.Mesh(
     new THREE.CircleGeometry(42, 40),
@@ -1024,8 +1089,11 @@ function buckingham(
   put(root, tube(15, 17, 2.4, 24), pink, x, 0, z);
   put(root, tube(9, 10, 2.2, 20), pink, x, 2.4, z);
   put(root, tube(4.5, 5, 2.2, 16), pink, x, 4.6, z);
+  // Lit from below after dark, as it is every summer evening.
   const spray = new THREE.MeshStandardMaterial({
     color: "#ffffff",
+    emissive: "#9fd2ff",
+    emissiveIntensity: night * 1.2,
     transparent: true,
     opacity: 0.55,
     roughness: 0.3,
@@ -1151,7 +1219,7 @@ function turfTexture() {
 }
 
 /** Navy Pier, reaching a kilometer into the lake, with the Centennial Wheel. Returns its animator. */
-function navyPier(root: THREE.Object3D) {
+function navyPier(root: THREE.Object3D, night: number) {
   const base = geo(41.8917, -87.6111);
   const pier = new THREE.Group();
   pier.position.set(base.x, 0, base.z);
@@ -1195,7 +1263,14 @@ function navyPier(root: THREE.Object3D) {
   frame.userData.live = true;
   frame.position.copy(hub);
   pier.add(frame);
-  const rim = new THREE.MeshStandardMaterial({ color: "#f2f4f6", roughness: 0.4, metalness: 0.3 });
+  // After dark the rim and spokes glow with their LEDs.
+  const rim = new THREE.MeshStandardMaterial({
+    color: "#f2f4f6",
+    roughness: 0.4,
+    metalness: 0.3,
+    emissive: "#cfe2ff",
+    emissiveIntensity: night * 1.6,
+  });
   frame.add(new THREE.Mesh(new THREE.TorusGeometry(R, 0.6, 6, 48), rim));
   frame.add(new THREE.Mesh(new THREE.TorusGeometry(R - 3, 0.35, 6, 48), rim));
   const spokes: [THREE.Vector3, THREE.Vector3][] = [];
@@ -1335,12 +1410,32 @@ function inRect(r: Rect, x: number, z: number, pad: number) {
   return x > r.x0 - pad && x < r.x1 + pad && z > r.z0 - pad && z < r.z1 + pad;
 }
 
+/** Sodium lamps along both sides of Lake Shore Drive, lit after sundown. */
+function driveLamps(root: THREE.Object3D) {
+  const zs: number[] = [];
+  for (let z = -5200; z <= 3000; z += 42) zs.push(z);
+  const lamps = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.8, 6, 4),
+    new THREE.MeshBasicMaterial({ color: "#ffc27a", toneMapped: false }),
+    zs.length * 2,
+  );
+  const m = new THREE.Matrix4();
+  let i = 0;
+  for (const z of zs) {
+    for (const x of [-31, -5])
+      lamps.setMatrixAt(i++, m.makeTranslation(x, 9, z + (x > -20 ? 21 : 0)));
+  }
+  lamps.frustumCulled = false;
+  root.add(lamps);
+}
+
 /** Ordinary buildings, block by block, on the ground texture's street grid. */
 function cityBlocks(
   occupied: readonly { x: number; z: number; r: number }[],
   nearRiver: (x: number, z: number, pad: number) => boolean,
   cap: number,
   aniso: number,
+  glow: number,
 ) {
   const maps = windowMaps(aniso);
   const mat = new THREE.MeshStandardMaterial({
@@ -1348,7 +1443,7 @@ function cityBlocks(
     map: maps?.map,
     emissive: new THREE.Color("#ffb56a"),
     emissiveMap: maps?.lights,
-    emissiveIntensity: 0.4,
+    emissiveIntensity: glow,
     roughness: 0.62,
     metalness: 0.16,
   });

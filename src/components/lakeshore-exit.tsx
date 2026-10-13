@@ -2,24 +2,27 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clsx } from "clsx";
 import { AlertTriangle, Plane, RotateCcw, Star, Volume2, VolumeX } from "lucide-react";
 import { cardinal, describeOutcome } from "@/game/grade";
-import { loadSave } from "@/game/save";
+import { loadSave, writeSave } from "@/game/save";
 import {
   DECISION_FT,
   DEFAULT_EXIT_FT,
   DEFAULT_MAL_PCT,
   HARD_DECK_FT,
+  LIGHTS,
   MAX_EXIT_FT,
   MIN_EXIT_FT,
-  PULL_NOW_FT,
 } from "@/game/constants";
 import {
   createBridge,
   type Bridge,
   type Hud,
   type JumpScore,
+  type Light,
   type Outcome,
   type Phase,
 } from "@/game/types";
+
+const LIGHT_LABEL: Record<Light, string> = { day: "Midday", golden: "Golden hour", dusk: "Dusk" };
 
 function commas(n: number) {
   return Math.round(n).toLocaleString("en-US");
@@ -68,6 +71,7 @@ export function LakeshoreExit() {
   const [altitudeFt, setAltitudeFt] = useState(DEFAULT_EXIT_FT);
   const [malPct, setMalPct] = useState(DEFAULT_MAL_PCT);
   const [muted, setMuted] = useState(false);
+  const [light, setLight] = useState<Light | null>(null);
   const [bootError, setBootError] = useState("");
   const [record, setRecord] = useState<Hud["save"]>({ bestM: null, bestScore: null, jumps: 0, rides: 0 });
 
@@ -160,7 +164,14 @@ export function LakeshoreExit() {
     setAltitudeFt(alt);
     setMalPct(mal);
     setRecord({ bestM: saved.bestM, bestScore: saved.bestScore, jumps: saved.jumps, rides: saved.rides });
+    setLight(saved.light);
+  }, []);
+
+  // A new time of day rebuilds the world on a fresh canvas behind the menu.
+  useEffect(() => {
+    if (!light) return;
     const bridge = bridgeRef.current;
+    bridge.light = light;
     let stop = () => {};
     let gone = false;
     void import("@/game/engine")
@@ -175,7 +186,7 @@ export function LakeshoreExit() {
       gone = true;
       stop();
     };
-  }, []);
+  }, [light]);
 
   const bridge = bridgeRef.current;
   const air = phase === "freefall" || phase === "deploying" || phase === "malfunction" || phase === "canopy";
@@ -196,7 +207,7 @@ export function LakeshoreExit() {
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-ink text-fg">
-      <canvas ref={viewRef} className="absolute inset-0 h-full w-full touch-none" />
+      <canvas key={light ?? "boot"} ref={viewRef} className="absolute inset-0 h-full w-full touch-none" />
       <div className="visor pointer-events-none absolute inset-0" />
 
       {showHud ? (
@@ -433,13 +444,39 @@ export function LakeshoreExit() {
               <span className="text-xs text-muted">If it fails: cut away, then reserve. You will not have long.</span>
             </label>
 
+            <div className="mt-3" role="radiogroup" aria-labelledby="light-label">
+              <span id="light-label" className="block font-display text-lg tracking-wide">
+                Time of day
+              </span>
+              <div className="mt-1.5 grid grid-cols-3 gap-2">
+                {LIGHTS.map((l) => (
+                  <button
+                    key={l}
+                    type="button"
+                    role="radio"
+                    aria-checked={light === l}
+                    className={clsx(
+                      "h-9 rounded-md border font-display text-base tracking-wide",
+                      light === l ? "border-amber bg-amber text-ink" : "border-line bg-ink/60 text-fg",
+                    )}
+                    onClick={() => {
+                      if (l === light) return;
+                      writeSave({ ...loadSave(), light: l });
+                      setLight(l);
+                    }}
+                  >
+                    {LIGHT_LABEL[l]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mt-5 flex gap-3 rounded-lg border border-line bg-ink/60 p-3">
               <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber" aria-hidden="true" />
               <div className="text-sm leading-relaxed">
                 <p className="font-display text-lg tracking-wide text-amber">Critical altitude {commas(DECISION_FT)} ft</p>
                 <p className="mt-1 text-muted">
-                  The altimeter yells when you pass it still in freefall. Pull there. Hard deck is {commas(HARD_DECK_FT)} ft.
-                  Below {commas(PULL_NOW_FT)} the warning does not let up.
+                  The altimeter yells if you pass it still in freefall. Pull there. Hard deck {commas(HARD_DECK_FT)} ft.
                 </p>
               </div>
             </div>
