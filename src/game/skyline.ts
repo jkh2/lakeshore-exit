@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { SHORE_X } from "./constants";
+import { Solids } from "./solids";
 import { rng } from "./world";
 
 // Downtown Chicago at true scale, so the skyline stands where it really does from 12th Street
@@ -188,6 +189,8 @@ function block(w: number, h: number, d: number, top?: readonly [number, number])
         pos.setXYZ(i, (pos.getX(i) * top[0]) / w, pos.getY(i), (pos.getZ(i) * top[1]) / d);
     }
     geo.computeVertexNormals();
+    // So the solid you can land on narrows with it.
+    geo.userData.taper = [top[0] / w, top[1] / d];
   }
   return geo;
 }
@@ -770,7 +773,11 @@ const LAKEFRONT: readonly Rect[] = [
 /** Parks and lawns inside the city rectangle: no streets or traffic run across them. */
 export const OPEN_GROUND: readonly Rect[] = [GRANT_PARK, CAMPUS, ...LAKEFRONT];
 
-export type Skyline = { update: (dt: number) => void };
+export type Skyline = {
+  update: (dt: number) => void;
+  /** Every building as boxes, to land on and to hit. */
+  solids: Solids;
+};
 
 export function createSkyline(
   scene: THREE.Scene,
@@ -949,8 +956,20 @@ export function createSkyline(
   harbor(root, coarse);
 
   // City blocks: one instanced mesh of boxes on the ground texture's street grid.
-  const city = cityBlocks(occupied, nearRiver, coarse ? 1500 : 2600, aniso, windows);
+  const solids = new Solids();
+  const city = cityBlocks(occupied, nearRiver, coarse ? 1500 : 2600, aniso, windows, solids);
   root.add(city);
+
+  // Everything else that stands up off the ground, measured before it is merged away.
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const skip = (o: THREE.Object3D | null): boolean =>
+    !!o && (o.userData.live === true || o.userData.hollow === true || skip(o.parent));
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || (mesh as THREE.InstancedMesh).isInstancedMesh || skip(mesh)) return;
+    solids.addMesh(mesh, box);
+  });
 
   bake(root);
 
@@ -958,6 +977,7 @@ export function createSkyline(
     update(dt) {
       wheel(dt);
     },
+    solids,
   };
 }
 
@@ -1180,7 +1200,8 @@ function museumCampus(
     roughness: 0.6,
     metalness: 0.3,
   });
-  put(root, prism(bowl, 34), stands, s.x, 0, s.z);
+  // Open in the middle, so it is not one solid box.
+  put(root, prism(bowl, 34), stands, s.x, 0, s.z).userData.hollow = true;
   root.add(
     flat(
       52,
@@ -1289,7 +1310,9 @@ function navyPier(root: THREE.Object3D, night: number) {
   for (const sx of [-1, 1])
     for (const sz of [-1, 1])
       legs.push([hub.clone(), new THREE.Vector3(hub.x + sx * 14, 3.2, sz * 9)]);
-  pier.add(new THREE.Mesh(bars(legs, 0.9), rim));
+  const legMesh = new THREE.Mesh(bars(legs, 0.9), rim);
+  legMesh.userData.hollow = true;
+  pier.add(legMesh);
   const N = 42;
   const cars = new THREE.InstancedMesh(
     new THREE.BoxGeometry(2.6, 2.8, 2.6),
@@ -1439,6 +1462,7 @@ function cityBlocks(
   cap: number,
   aniso: number,
   glow: number,
+  solids: Solids,
 ) {
   const maps = windowMaps(aniso);
   const mat = new THREE.MeshStandardMaterial({
@@ -1537,6 +1561,14 @@ function cityBlocks(
   const dummy = new THREE.Object3D();
   const color = new THREE.Color();
   boxes.forEach((b, i) => {
+    solids.add({
+      x0: b.x - b.w / 2,
+      x1: b.x + b.w / 2,
+      z0: b.z - b.d / 2,
+      z1: b.z + b.d / 2,
+      y0: 0,
+      y1: b.h,
+    });
     dummy.position.set(b.x, b.h / 2, b.z);
     dummy.scale.set(b.w, b.h, b.d);
     dummy.updateMatrix();
