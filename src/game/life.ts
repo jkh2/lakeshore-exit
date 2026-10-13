@@ -29,14 +29,18 @@ type Mover = {
 const MOVE_SHADER = /* glsl */ `
   uniform float uTime;
   attribute vec4 aMove;
-  // Distance along the path, and +1 going out or -1 coming back.
-  vec2 moverAt() {
+  // Distance along the path, +1 going out or -1 coming back, and a size that grows from
+  // nothing over the first and last stretch of a path that wraps, so nothing pops in or out.
+  // People standing still have no speed and keep their size.
+  vec3 moverAt() {
     float t = aMove.z + uTime * aMove.x;
     if (aMove.w > 0.5) {
       float f = fract(t / aMove.y * 0.5);
-      return f < 0.5 ? vec2(aMove.y * f * 2.0, 1.0) : vec2(aMove.y * (2.0 - f * 2.0), -1.0);
+      return f < 0.5 ? vec3(aMove.y * f * 2.0, 1.0, 1.0) : vec3(aMove.y * (2.0 - f * 2.0), -1.0, 1.0);
     }
-    return vec2(mod(t, aMove.y), 1.0);
+    float d = mod(t, aMove.y);
+    if (aMove.x == 0.0) return vec3(d, 1.0, 1.0);
+    return vec3(d, 1.0, smoothstep(0.0, 40.0, d) * smoothstep(aMove.y, aMove.y - 40.0, d));
   }`;
 
 /** Patches a material so each instance slides along its local -z by its `aMove` path. */
@@ -52,7 +56,8 @@ function moving<M extends THREE.Material>(mat: M, time: THREE.IUniform<number>, 
       .replace(
         "#include <begin_vertex>",
         `#include <begin_vertex>
-         vec2 mv = moverAt();
+         vec3 mv = moverAt();
+         transformed *= mv.z;
          transformed.xz *= mv.y;
          transformed.z -= mv.x;`,
       );
@@ -483,6 +488,42 @@ export function createLife(
       pingpong: true,
     });
   }
+  // Closer in, boats run up and down the shore past the beach, outside Monroe Harbor's wall
+  // and south of Navy Pier and the lighthouse breakwater, and sailboats tack off the beach.
+  for (let i = 0; i < Math.round(8 * boatN); i++) {
+    const north = i % 2 === 0;
+    const span = 9650;
+    motors.push({
+      x: 900 + r() * 950,
+      y: 0.35,
+      z: north ? 7000 : 7000 - span,
+      yaw: north ? 0 : Math.PI,
+      speed: 8 + r() * 7,
+      span,
+      phase: r() * span,
+      color: r() < 0.7 ? hex("#ffffff") : pick(r, [hex("#1f3a66"), hex("#a8261f")]),
+    });
+  }
+  for (let i = 0; i < Math.round(14 * boatN); i++) {
+    const yaw = r() * Math.PI * 2;
+    const span = 300 + r() * 400;
+    // Keep each tack inside the bay: east of the harbor wall, clear of the beach.
+    const x = 450 + r() * 1300;
+    const z = -900 + r() * 3600;
+    const ex = x - Math.sin(yaw) * span;
+    const ez = z - Math.cos(yaw) * span;
+    if (ex < 450 || ex > 1850 || ez < -1000 || ez > 3000) continue;
+    sails.push({
+      x,
+      y: 0.3,
+      z,
+      yaw,
+      speed: 2.5 + r() * 2.5,
+      span,
+      phase: r() * span * 2,
+      pingpong: true,
+    });
+  }
   // Lake cruises run between Navy Pier and Museum Campus, inside the lighthouse breakwater.
   for (let i = 0; i < 2; i++) {
     tours.push({
@@ -506,7 +547,7 @@ export function createLife(
     { geo: wake(70, 3.4, 15), mat: foamMat },
   ]);
 
-  // ---- Airliners crossing high over the lake toward Midway and O'Hare ----
+  // ---- Airliners over the lakefront ----
   const jet = merge([
     box(3.6, 3.6, 38, 0, 0, 0, [0.96, 0.97, 0.98]),
     box(34, 0.5, 6, 0, -0.6, 1, [0.82, 0.84, 0.86]),
@@ -515,26 +556,22 @@ export function createLife(
     box(2.2, 2.2, 4.4, -6.5, -2, -1, [0.7, 0.72, 0.75]),
     box(2.2, 2.2, 4.4, 6.5, -2, -1, [0.7, 0.72, 0.75]),
   ]);
+  // Arrivals come in low off the lake toward O'Hare and Midway; departures climb out east.
+  // Paths are 60 km long, staggered so one is usually somewhere over the lakefront.
   const jets: Mover[] = [
+    { x: 30000, y: 1250, z: -2600, yaw: Math.PI / 2, speed: 95, span: 60000, phase: 0 },
     {
       x: -30000,
-      y: 1900,
-      z: 9000,
-      yaw: -Math.PI / 2 + 0.06,
-      speed: 125,
+      y: 2200,
+      z: 5000,
+      yaw: -Math.PI / 2 - 0.05,
+      speed: 130,
       span: 60000,
-      phase: 21000,
+      phase: 20000,
     },
-    { x: 30000, y: 2700, z: -12000, yaw: Math.PI / 2 - 0.1, speed: 150, span: 60000, phase: 34000 },
-    {
-      x: -30000,
-      y: 1300,
-      z: 15000,
-      yaw: -Math.PI / 2 - 0.04,
-      speed: 110,
-      span: 60000,
-      phase: 5000,
-    },
+    { x: 30000, y: 1700, z: -9000, yaw: Math.PI / 2 + 0.03, speed: 110, span: 60000, phase: 40000 },
+    { x: -30000, y: 3200, z: 12000, yaw: -Math.PI / 2, speed: 160, span: 60000, phase: 8000 },
+    { x: 30000, y: 1500, z: 2500, yaw: Math.PI / 2 - 0.02, speed: 100, span: 60000, phase: 52000 },
   ];
   fleet(root, jets, [
     {
@@ -669,6 +706,27 @@ export function createLife(
       span: 1,
       phase: 0,
     });
+  }
+  // Small groups around the edge of the landing area, out to see who sticks it.
+  for (const [gx, gz] of [
+    [DZ_X + 5, DZ_Z - 56],
+    [DZ_X + 32, DZ_Z - 47],
+    [DZ_X - 4, DZ_Z + 57],
+    [DZ_X + 36, DZ_Z + 45],
+  ] as const) {
+    for (let i = 0; i < 5; i++) {
+      const x = gx + (r() - 0.5) * 7;
+      const z = gz + (r() - 0.5) * 5;
+      person({
+        x,
+        y: 0.05,
+        z,
+        yaw: Math.atan2(x - DZ_X, z - DZ_Z) + (r() - 0.5) * 0.7,
+        speed: 0,
+        span: 1,
+        phase: 0,
+      });
+    }
   }
   for (let i = 0, made = 0; i < 300 && made < 34 * n; i++) {
     const x = 46 + r() * 80;

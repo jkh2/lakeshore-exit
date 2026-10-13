@@ -6,6 +6,8 @@ import {
   DZ_X,
   DZ_Z,
   FT_PER_M,
+  GREEN_HALF,
+  GREEN_IN,
   HARD_DECK_FT,
   MPH_PER_MPS,
   PLANE_MPS,
@@ -744,9 +746,11 @@ export function mountGame(
   }
 
   function resetRun() {
+    // Board on the jump run, GREEN_IN seconds short of the green light.
+    const start = path[0] ?? new THREE.Vector3();
     seg = 0;
-    segDist = 0;
-    plane.position.copy(path[0] ?? new THREE.Vector3());
+    segDist = Math.max(0, DZ_Z - GREEN_HALF - GREEN_IN * PLANE_MPS - start.z);
+    plane.position.set(start.x, start.y, start.z + segDist);
     planeYaw = Math.PI;
   }
 
@@ -1423,7 +1427,7 @@ export function mountGame(
 
   function southboundLight(dir: THREE.Vector3) {
     const onRun = Math.abs(plane.position.x - RUN_X) < 90 && dir.z > 0.55;
-    green = onRun && Math.abs(plane.position.z - DZ_Z) < 280;
+    green = onRun && Math.abs(plane.position.z - DZ_Z) < GREEN_HALF;
     if (green && !wasGreen && phase === "cabin") {
       // The jump buzzer, and the bar starts up its posts.
       audio.beep(660, 0.22, 0.07);
@@ -1517,13 +1521,13 @@ export function mountGame(
     spotShort = "";
     if (phase === "cabin" || phase === "menu") {
       const onLine = Math.abs(plane.position.x - RUN_X) < 90 && planeVel.z > 0.5 * PLANE_MPS * 0.5;
-      const secs = Math.max(0, Math.round((-280 - plane.position.z) / PLANE_MPS));
+      const secs = Math.max(0, Math.round((DZ_Z - GREEN_HALF - plane.position.z) / PLANE_MPS));
       if (green) spot = spotShort = "GO";
       else if (!onLine) spot = spotShort = "GO-AROUND";
-      else if (plane.position.z < -280) {
+      else if (plane.position.z < DZ_Z - GREEN_HALF) {
         spot = `GREEN IN ${secs}s`;
         spotShort = `${secs}s`;
-      } else if (plane.position.z > 280) {
+      } else if (plane.position.z > DZ_Z + GREEN_HALF) {
         spot = "PAST THE SPOT";
         spotShort = "PAST";
       } else spot = spotShort = "ON THE SPOT";
