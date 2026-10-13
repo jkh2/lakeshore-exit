@@ -17,6 +17,9 @@ import {
   MPH_PER_MPS,
   PLANE_MPS,
   PULL_NOW_FT,
+  GATE_FLOOR_FT,
+  RINGS_HOP_MIN_FT,
+  RING_FLOOR_FT,
   RUN_X,
   SHORE_X,
   WIND_X,
@@ -46,6 +49,7 @@ import {
   createHeli,
   type BalloonTheme,
 } from "./rides";
+import { createCourse, planFlat, planGates, type RingKind, type RingSpec } from "./rings";
 import type { Contact, Solid } from "./solids";
 import { createWing, flyWing, pathPitch, wingFill, type Wing } from "./wingsuit";
 import { SUN_DIR, applyLight, cityTexture, createAtmosphere, createWaterMaterial, streetLights } from "./world";
@@ -69,6 +73,11 @@ const STAND_EYE = 1.5;
 const BASE_OPEN_S = 1.25;
 /** Wingsuit: passing this close to a building counts as a close pass. */
 const PASS_M = 25;
+/**
+ * Wingsuit gates circle a point just off the beach, out over the water and back past Museum
+ * Campus and the skyline, so wherever the course ends the beach is in reach under canopy.
+ */
+const GATE_HUB = { x: DZ_X + 250, z: DZ_Z - 250 };
 /** Seconds aboard the helicopter before the pilot has the hover settled and clears you. */
 const HELI_CLEAR_S = 4;
 
@@ -661,6 +670,9 @@ export function mountGame(
     scene.add(b.group);
     return { b, off: new THREE.Vector3(dx, dy, dz), phase: 2.3 + i * 2.9, burn: 0 };
   });
+  // The ring challenge's hoops, laid fresh for each jump that flies one.
+  const course = createCourse();
+  scene.add(course.group);
 
   const canopyRig = createCanopy();
   const canopy = canopyRig.group;
@@ -803,6 +815,9 @@ export function mountGame(
   let spinR = 0;
   let buffetAt = 0;
   let stableS: number | null = null;
+  /** This jump flies a ring course; the course's seed, kept when you jump the same jump again. */
+  let ringsOn = false;
+  let courseSeed = (Math.random() * 2 ** 31) | 0;
   const lzPos = new THREE.Vector3();
   const keys = new Set<string>();
   let qaKeys: Set<string> | null = null;
@@ -909,6 +924,7 @@ export function mountGame(
     spinP = 0;
     spinR = 0;
     stableS = null;
+    course.clear();
     audio.resetDeath();
     audio.resume();
   }
@@ -920,6 +936,8 @@ export function mountGame(
     save.suit = bridge.suit;
     suit = bridge.suit;
     ride = bridge.ride;
+    save.rings = bridge.rings;
+    ringsOn = bridge.rings && ride !== "roof";
     if (ride === "heli" || ride === "balloon") {
       board();
       persist();
@@ -958,8 +976,9 @@ export function mountGame(
     mode = "skydive";
     malChance = clamp(bridge.malChance, 0, 0.4);
     save.malPct = Math.round(malChance * 100);
-    hopAlt = clamp(bridge.hopFt, HOP_MIN_FT, HOP_MAX_FT) / FT_PER_M;
-    save.hopFt = Math.round(hopAlt * FT_PER_M);
+    save.hopFt = Math.round(clamp(bridge.hopFt, HOP_MIN_FT, HOP_MAX_FT));
+    // A ring course needs room below the dead air, so rings take you up a little higher.
+    hopAlt = Math.max(save.hopFt, ringsOn ? RINGS_HOP_MIN_FT : 0) / FT_PER_M;
     rideT = 0;
     leftAt = -1;
     burn = 0;
@@ -1011,6 +1030,7 @@ export function mountGame(
     const yaw = heading;
     resetJump();
     ride = "roof";
+    ringsOn = false;
     standOnRoof(x, z, yaw, name);
     persist();
   }
@@ -1030,6 +1050,7 @@ export function mountGame(
     canopy.visible = false;
     streamer.visible = false;
     resetFormation();
+    course.clear();
     flying = "none";
     if (document.pointerLockElement) void document.exitPointerLock();
   }
@@ -1048,6 +1069,7 @@ export function mountGame(
       glide: winged && glideDrop > 30 ? glideM / glideDrop : null,
       passes: winged ? passes : 0,
       closestM: winged ? closestM : null,
+      rings: ringsOn ? { got: course.got(), total: course.total() } : null,
     };
   }
 
@@ -1165,6 +1187,11 @@ export function mountGame(
       resetFormation();
       exitTime = simTime;
       startWing(bodyYaw);
+    } else if (ringsOn) {
+      // The rings instead of the formation: you leave on your own and the course is below you.
+      resetFormation();
+      exitTime = simTime;
+      layRings("flat", 230);
     } else {
       _v2.set(1, 0, 0).applyQuaternion(plane.quaternion);
       startFormation(_v2);
@@ -1289,6 +1316,10 @@ export function mountGame(
       pushLog(`Flew ${km} in the suit${g !== null ? ` · glide ${g.toFixed(1)}` : ""}`);
       wing = null;
     }
+    if (course.next()) {
+      const left = course.close(simTime);
+      pushLog(`Rings ${course.got()} of ${course.total()} · pulled with ${left} to go`);
+    }
     heading = bodyYaw;
     if (base || deadAir) delayS = simTime - exitTime;
     pushLog(
@@ -1355,6 +1386,7 @@ export function mountGame(
   function forcePhase(p: string) {
     outcome = null;
     ride = p.startsWith("roof") ? "roof" : "plane";
+    ringsOn = bridge.rings && ride !== "roof";
     if (p === "heli" || p === "balloon") {
       resetJump();
       suit = bridge.suit;
@@ -1547,6 +1579,7 @@ export function mountGame(
     skyline.update(dt);
     life.update(simTime);
     pads.update(simTime);
+    course.update(simTime, camera.position);
     sock.rotation.y = Math.sin(simTime * 7) * 0.12;
     moveRides(dt);
     (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity =
@@ -1568,7 +1601,8 @@ export function mountGame(
       lookOffPitch = clamp(lookOffPitch - lookDY * sens, -1.0, 1.0);
     } else if (phase === "freefall" || phase === "deploying" || phase === "malfunction") {
       bodyYaw -= lookDX * sens;
-      bodyPitch = clamp(bodyPitch - lookDY * sens, -1.35, 1.15);
+      // On a ring course you can look almost straight down at the next ring.
+      bodyPitch = clamp(bodyPitch - lookDY * sens, ringsLive() ? -1.5 : -1.35, 1.15);
     }
     lookDX = 0;
     lookDY = 0;
@@ -1653,6 +1687,7 @@ export function mountGame(
         terminal = 76 + diveAmt * 16;
         h += 10;
       }
+      if (ringsLive()) h = ringTrack(terminal, arch, dive);
       if (mal === "streamer") terminal = 40;
       const fx = -Math.sin(bodyYaw);
       const fz = -Math.cos(bodyYaw);
@@ -1749,6 +1784,7 @@ export function mountGame(
       return;
     }
     floorY = solids.top(pos.x, pos.z, pos.y)?.y1 ?? 0;
+    if (phase === "freefall" && course.next()) ringCheck();
 
     if (pos.y <= 0 && phase !== "canopy") {
       if (phase === "deploying" && mal === "none" && deployingReserve) finishImpact("Reserve did not open in time");
@@ -2018,6 +2054,8 @@ export function mountGame(
       spinP = fromHeli ? -0.9 : -1.15;
       spinR = (Math.random() < 0.5 ? -1 : 1) * (fromHeli ? 0.3 : 0.45);
       buffetAt = Math.random() * 6;
+      // Below the dead air.
+      if (ringsOn) layRings("flat", 300);
     }
     persist();
   }
@@ -2058,6 +2096,77 @@ export function mountGame(
     }
   }
 
+  /** Lays this jump's ring course: flat rings below a belly flyer, or gates ahead of a wingsuit. */
+  function layRings(kind: RingKind, firstDrop: number) {
+    let specs: RingSpec[];
+    if (kind === "flat") {
+      specs = planFlat({
+        seed: courseSeed,
+        from: pos,
+        firstDrop,
+        floorY: RING_FLOOR_FT / FT_PER_M,
+        toward: { x: DZ_X, z: DZ_Z },
+        windX: WIND_X,
+        windZ: WIND_Z,
+      });
+    } else {
+      specs = planGates({
+        seed: courseSeed,
+        from: pos,
+        yaw: wing?.yaw ?? bodyYaw,
+        floorY: GATE_FLOOR_FT / FT_PER_M,
+        toward: GATE_HUB,
+      });
+    }
+    course.lay(specs, kind, simTime);
+    if (!specs.length) return;
+    pushLog(`Ring course · ${specs.length} ${kind === "flat" ? "rings" : "gates"}`);
+    flashText = kind === "flat" ? `${specs.length} RINGS BELOW` : `${specs.length} GATES AHEAD`;
+    flashUntil = simTime + 3;
+  }
+
+  /** A ring course is laid and has rings left to fly. */
+  function ringsLive() {
+    return phase === "freefall" && course.next() !== null;
+  }
+
+  /**
+   * On a ring course a belly flyer tracks where they look: looking at a ring below sets the
+   * speed across that carries the fall down that line of sight, up to a full track. Looking
+   * straight down holds you over the spot.
+   */
+  function ringTrack(terminal: number, arch: boolean, dive: boolean) {
+    const down = clamp(-bodyPitch, 0.05, 1.5);
+    return Math.min(arch ? 14 : dive ? 40 : 30, terminal / Math.tan(down));
+  }
+
+  /** Through the next ring, or past it. */
+  function ringCheck() {
+    const ev = course.cross(_prev, pos, simTime);
+    if (!ev) return;
+    const got = course.got();
+    const n = course.total();
+    const done = course.next() === null;
+    if (ev === "pass") {
+      audio.ring(course.streak());
+      audio.whoosh(0.35);
+    } else audio.ringMiss();
+    if (done && got === n) {
+      flashText = `CLEAN SWEEP · ${n} OF ${n}`;
+      flashUntil = simTime + 2.6;
+      audio.sweep();
+    } else if (done) {
+      flashText = `RINGS DONE · ${got} OF ${n}`;
+      flashUntil = simTime + 2.2;
+    } else {
+      const run = course.streak();
+      flashText =
+        ev === "miss" ? `MISSED · ${got} OF ${n}` : run >= 3 ? `${run} IN A ROW · ${got} OF ${n}` : `THROUGH · ${got} OF ${n}`;
+      flashUntil = simTime + 1.1;
+    }
+    if (done) pushLog(`Rings ${got} of ${n}${got === n ? " · clean sweep" : ""}`);
+  }
+
   /** Wingsuit flight: the suit flies, the eyes follow the flight path, and close passes count. */
   function flyTheSuit(dt: number, input: ReturnType<typeof sample>) {
     if (!wing) return;
@@ -2065,6 +2174,8 @@ export function mountGame(
     const gs = Math.hypot(vel.x, vel.z);
     flightM += gs * dt;
     if (!suitFlying && fill > 0.98 && gs > -vel.y) suitFlying = true;
+    // Gates go down once the suit flies, ahead along the line it is flying.
+    if (suitFlying && ringsOn && !course.laid()) layRings("gate", 0);
     if (suitFlying) {
       glideM += gs * dt;
       glideDrop -= vel.y * dt;
@@ -2119,6 +2230,7 @@ export function mountGame(
       terminal = 76 + diveAmt * 16;
       h += 10;
     }
+    if (ringsLive()) h = ringTrack(terminal, arch, dive);
     const fall = Math.max(0, -vel.y);
     vel.y -= 9.81 * (1 - (fall / terminal) ** 2) * dt;
     const k = 1 - Math.exp(-1.8 * Math.min(1, (fall / 40) ** 2) * dt);
@@ -2258,10 +2370,13 @@ export function mountGame(
         const glide = Math.hypot(vel.x, vel.z) / Math.max(0.1, down);
         if (wingFill(wing) < 0.6) prompt = "LET THE SUIT FILL";
         else if (down < 0.5) prompt = `CLIMBING · ${pullKey}`;
+        else if (course.next())
+          prompt = `GATES ${course.got()} OF ${course.total()} · GLIDE ${glide > 9.9 ? "10+" : glide.toFixed(1)}`;
         else prompt = `GLIDE ${glide > 9.9 ? "10+" : glide.toFixed(1)} · ${pullKey}`;
       } else if (mode === "base") prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${coarse ? "TAP PULL" : "SPACE PULLS"}`;
       else if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
       else if (deadAir && stableS === null) prompt = coarse ? "DEAD AIR · PUSH UP TO ARCH" : "DEAD AIR · HOLD W TO ARCH";
+      else if (course.next()) prompt = `RINGS ${course.got()} OF ${course.total()} · LOOK AT THE GOLD ONE`;
       else if (deadAir) prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${pullKey}`;
       else if (docked) prompt = "DOCKED · HOLD ON UNTIL BREAK-OFF";
       else if (formation.active()) {
@@ -2378,7 +2493,12 @@ export function mountGame(
       hud.baseV = clamp(-at.y * 0.5 + 0.5, 0.1, 0.86);
       hud.baseLabel = label;
     };
-    if (phase === "freefall" && formation.active() && !docked) {
+    const ring = phase === "freefall" ? course.next() : null;
+    if (ring) {
+      const dist = ring.c.distanceTo(camera.position);
+      // The marker's circle sits in the middle of the hole: aim there.
+      marker(_base.copy(ring.c), `${wing ? "GATE" : "RING"} ${course.index() + 1} · ${Math.round(dist)} m`);
+    } else if (phase === "freefall" && formation.active() && !docked) {
       formation.center(_base);
       const dist = _base.distanceTo(camera.position);
       if (dist > 2.6) marker(_base, `BASE ${Math.round(dist)} m`);
@@ -2685,7 +2805,11 @@ export function mountGame(
     const frameDt = Math.min(timer.getDelta(), 0.05);
     const command = bridge.command;
     bridge.command = null;
-    if (command === "start" && phase === "menu") begin();
+    // A new course from the menu; jumping again flies the same one.
+    if (command === "start" && phase === "menu") {
+      courseSeed = (Math.random() * 2 ** 31) | 0;
+      begin();
+    }
     else if (command === "again") backToMenu();
     else if (command === "retry") begin();
     else if (command === "base") baseFromHere();
@@ -2887,6 +3011,7 @@ export function mountGame(
     heli.dispose();
     balloon.dispose();
     fleet.forEach((f) => f.b.dispose());
+    course.dispose();
     body.dispose();
     formation.dispose();
     normalTex.dispose();

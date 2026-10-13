@@ -15,6 +15,7 @@ export function defaultSave(): Save {
     ride: "plane",
     roof: "southloop",
     suit: "rig",
+    rings: false,
   };
 }
 
@@ -39,6 +40,7 @@ export function loadSave(): Save {
       ride: isRide(parsed.ride) ? parsed.ride : base.ride,
       roof: isPadId(parsed.roof) ? parsed.roof : base.roof,
       suit: parsed.suit === "wing" ? "wing" : "rig",
+      rings: parsed.rings === true,
     };
   } catch {
     return defaultSave();

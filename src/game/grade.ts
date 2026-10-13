@@ -48,6 +48,8 @@ export function describeOutcome(o: Outcome): { title: string; lede: string } {
       bits.unshift(o.ride === "heli" ? "Off the helicopter" : "Out of the balloon");
       if (o.stableS !== null) bits.push(`stable in ${o.stableS.toFixed(1)} s`);
     }
+    if (o.rings && o.rings.total > 0)
+      bits.push(`${o.rings.got} of ${o.rings.total} ${o.suit === "wing" ? "gates" : "rings"}`);
     bits.push(o.usedReserve ? "reserve ride" : "main");
   }
   bits.push(o.intoWind ? "into the wind" : "downwind");

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clsx } from "clsx";
-import { AlertTriangle, Bird, Building2, Plane, RotateCcw, Star, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Bird, Building2, Cloud, Plane, RotateCcw, Star, Users, Volume2, VolumeX } from "lucide-react";
 import { cardinal, describeOutcome } from "@/game/grade";
 import { loadSave, writeSave } from "@/game/save";
 import {
@@ -19,6 +19,7 @@ import {
   MIN_EXIT_FT,
   PADS,
   RIDES,
+  RINGS_HOP_MIN_FT,
 } from "@/game/constants";
 import {
   createBridge,
@@ -85,6 +86,7 @@ export function LakeshoreExit() {
   const [ride, setRide] = useState<Ride>("plane");
   const [roof, setRoof] = useState<PadId>("southloop");
   const [suit, setSuit] = useState<Suit>("rig");
+  const [rings, setRings] = useState(false);
   const [banner, setBanner] = useState("");
   const [bannerLevel, setBannerLevel] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -196,12 +198,14 @@ export function LakeshoreExit() {
     bridgeRef.current.ride = saved.ride;
     bridgeRef.current.roof = saved.roof;
     bridgeRef.current.suit = saved.suit;
+    bridgeRef.current.rings = saved.rings;
     setAltitudeFt(alt);
     setHopFt(hop);
     setMalPct(mal);
     setRide(saved.ride);
     setRoof(saved.roof);
     setSuit(saved.suit);
+    setRings(saved.rings);
     setRecord({ bestM: saved.bestM, bestScore: saved.bestScore, jumps: saved.jumps, rides: saved.rides });
     setLight(saved.light);
   }, []);
@@ -260,6 +264,14 @@ export function LakeshoreExit() {
     writeSave({ ...loadSave(), suit: next });
   };
   const winged = suit === "wing";
+  const chooseRings = (next: boolean) => {
+    bridge.rings = next;
+    setRings(next);
+    writeSave({ ...loadSave(), rings: next });
+  };
+  /** The ring challenge, where it can be flown: not off a building. */
+  const ringRun = rings && !fromRoof;
+  const hopMin = ringRun ? RINGS_HOP_MIN_FT : HOP_MIN_FT;
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-ink text-fg">
@@ -530,6 +542,38 @@ export function LakeshoreExit() {
               </div>
             </div>
 
+            {fromRoof ? null : (
+              <div className="mt-3" role="radiogroup" aria-labelledby="challenge-label">
+                <span id="challenge-label" className="block font-display text-lg tracking-wide">
+                  Freefall
+                </span>
+                <div className="mt-1.5 grid grid-cols-2 gap-2">
+                  {([false, true] as const).map((v) => (
+                    <button
+                      key={String(v)}
+                      type="button"
+                      role="radio"
+                      aria-checked={rings === v}
+                      className={clsx(
+                        "flex h-10 items-center justify-center gap-2 rounded-md border font-display text-base tracking-wide",
+                        rings === v ? "border-amber bg-amber text-ink" : "border-line bg-ink/60 text-fg",
+                      )}
+                      onClick={() => chooseRings(v)}
+                    >
+                      {v ? (
+                        <RingsIcon className="size-4" />
+                      ) : ride === "plane" && !winged ? (
+                        <Users className="size-4" aria-hidden="true" />
+                      ) : (
+                        <Cloud className="size-4" aria-hidden="true" />
+                      )}
+                      {v ? "Rings" : ride === "plane" && !winged ? "Formation" : "Open sky"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {fromRoof ? (
               <div className="mt-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Rooftop">
                 {PADS.map((p) => (
@@ -556,15 +600,15 @@ export function LakeshoreExit() {
             <label className="mt-5 block" htmlFor="exit-alt">
               <span className="flex items-baseline justify-between font-display text-lg tracking-wide">
                 Exit altitude
-                <span className="tabular-nums text-amber">{commas(hop ? hopFt : altitudeFt)} ft</span>
+                <span className="tabular-nums text-amber">{commas(hop ? Math.max(hopMin, hopFt) : altitudeFt)} ft</span>
               </span>
               <input
                 id="exit-alt"
                 type="range"
-                min={hop ? HOP_MIN_FT : MIN_EXIT_FT}
+                min={hop ? hopMin : MIN_EXIT_FT}
                 max={hop ? HOP_MAX_FT : MAX_EXIT_FT}
                 step={500}
-                value={hop ? hopFt : altitudeFt}
+                value={hop ? Math.max(hopMin, hopFt) : altitudeFt}
                 suppressHydrationWarning
                 onChange={(e) => {
                   const v = Number(e.target.value);
@@ -579,7 +623,7 @@ export function LakeshoreExit() {
               />
               <span className="text-xs text-muted">
                 {hop
-                  ? `${commas(HOP_MIN_FT)} to ${commas(HOP_MAX_FT)} ft above the lake`
+                  ? `${commas(hopMin)} to ${commas(HOP_MAX_FT)} ft above the lake${ringRun ? ", with room for rings" : ""}`
                   : `${commas(MIN_EXIT_FT)} to ${commas(MAX_EXIT_FT)} ft above the lake`}
               </span>
             </label>
@@ -704,6 +748,7 @@ export function LakeshoreExit() {
                   ) : (
                     <li>Dead air: hold W to arch until you are stable, then A and D turn, S dives, space pulls.</li>
                   )}
+                  {ringRun ? <li>{RINGS_HELP[winged ? 1 : 0]}</li> : null}
                   <li>Canopy: A and D turn, S flares. Land facing the lake, into the wind.</li>
                 </>
               ) : (
@@ -717,6 +762,7 @@ export function LakeshoreExit() {
                   ) : (
                     <li>Freefall: A and D turn, W arches, S dives, space pulls.</li>
                   )}
+                  {ringRun ? <li>{RINGS_HELP[winged ? 1 : 0]}</li> : null}
                   <li>Canopy: A and D turn, S flares. Land facing the lake, into the wind. The marked rooftops count too.</li>
                 </>
               )}
@@ -827,6 +873,31 @@ const START: Record<Ride, string> = {
 };
 
 /** Lucide has a plane and a building; the helicopter and the balloon are drawn to match them. */
+/** How the ring challenge flies: standard rig, then wingsuit. */
+const RINGS_HELP: [string, string] = [
+  "Rings: you track toward where you look, so look at the gold ring to fly into it. W slows the fall, S speeds it up.",
+  "Gates: once the suit flies, a course of gates curls out ahead. Fly through the gold one, then the next.",
+];
+
+/** Three hoops, one behind the other. */
+function RingsIcon({ className }: { className: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <ellipse cx="12" cy="5" rx="8" ry="2.5" />
+      <ellipse cx="12" cy="12" rx="6" ry="2" />
+      <ellipse cx="12" cy="18.5" rx="4" ry="1.5" />
+    </svg>
+  );
+}
+
 function RideIcon({ ride, className }: { ride: Ride; className: string }) {
   if (ride === "plane") return <Plane className={className} aria-hidden="true" />;
   if (ride === "roof") return <Building2 className={className} aria-hidden="true" />;
