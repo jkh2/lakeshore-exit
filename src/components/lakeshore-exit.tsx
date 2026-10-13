@@ -602,7 +602,7 @@ function TouchButton({
   return (
     <button
       type="button"
-      className="h-14 min-w-24 rounded-md bg-amber px-3 font-display text-lg tracking-widest text-ink"
+      className="h-14 min-w-24 touch-none rounded-md bg-amber px-3 font-display text-lg tracking-widest text-ink select-none"
       onPointerDown={onDown}
       onPointerUp={onUp}
       onPointerCancel={onUp}
@@ -616,7 +616,7 @@ function TouchButton({
 function Stick({ onChange }: { onChange: (x: number, y: number) => void }) {
   const pad = useRef<HTMLDivElement>(null);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
-  const id = useRef(0);
+  const id = useRef<number | null>(null);
 
   function apply(clientX: number, clientY: number) {
     const el = pad.current;
@@ -633,10 +633,19 @@ function Stick({ onChange }: { onChange: (x: number, y: number) => void }) {
     onChange(x, -y);
   }
 
+  function release(e: PointerEvent) {
+    if (e.pointerId !== id.current) return;
+    id.current = null;
+    setKnob({ x: 0, y: 0 });
+    onChange(0, 0);
+  }
+
+  // touch-none keeps the browser from taking the drag over as a scroll or zoom, which
+  // cancels the pointer and used to leave the stick frozen wherever it was.
   return (
     <div
       ref={pad}
-      className="relative size-28 rounded-full border border-line bg-panel/70"
+      className="relative size-28 touch-none rounded-full border border-line bg-panel/70 select-none"
       onPointerDown={(e) => {
         id.current = e.pointerId;
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -646,15 +655,13 @@ function Stick({ onChange }: { onChange: (x: number, y: number) => void }) {
         if (e.pointerId !== id.current) return;
         apply(e.clientX, e.clientY);
       }}
-      onPointerUp={(e) => {
-        if (e.pointerId !== id.current) return;
-        id.current = 0;
-        setKnob({ x: 0, y: 0 });
-        onChange(0, 0);
-      }}
+      onPointerUp={release}
+      onPointerCancel={release}
+      onLostPointerCapture={release}
     >
+      {/* Centered by the transform alone: the translate utilities would shift it a second time. */}
       <div
-        className="absolute top-1/2 left-1/2 size-12 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber"
+        className="pointer-events-none absolute top-1/2 left-1/2 size-12 rounded-full bg-amber"
         style={{ transform: `translate(calc(-50% + ${knob.x}px), calc(-50% + ${knob.y}px))` }}
       />
     </div>
