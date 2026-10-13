@@ -135,6 +135,29 @@ export class Solids {
     return null;
   }
 
+  /** Meters from (x, y, z) to the closest solid's surface, searching up to `max` away. */
+  nearest(x: number, y: number, z: number, max: number): number {
+    let best = max;
+    const reach = Math.ceil(max / CELL);
+    const cx = Math.floor(x / CELL);
+    const cz = Math.floor(z / CELL);
+    for (let i = cx - reach; i <= cx + reach; i++) {
+      for (let j = cz - reach; j <= cz + reach; j++) {
+        const cell = this.grid.get(key(i, j));
+        if (!cell) continue;
+        for (const id of cell) {
+          const s = this.list[id]!;
+          const dx = Math.max(s.x0 - x, 0, x - s.x1);
+          const dz = Math.max(s.z0 - z, 0, z - s.z1);
+          const dy = Math.max(s.y0 - y, 0, y - s.y1);
+          const d = Math.hypot(dx, dy, dz);
+          if (d < best) best = d;
+        }
+      }
+    }
+    return best;
+  }
+
   /**
    * Moving from `from` to `to`: landed on a roof if the feet came down through its top,
    * or hit a wall if they went into its side.

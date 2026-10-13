@@ -34,6 +34,12 @@ export function describeOutcome(o: Outcome): { title: string; lede: string } {
     title = o.roof === "Navy Pier" ? "Navy Pier" : "Rooftop landing";
   } else if (o.area === "park") title = "Park landing";
   const bits = [where];
+  if (o.suit === "wing" && o.flightM !== null) {
+    const m = o.flightM;
+    bits.push(
+      `${m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`} in the wingsuit`,
+    );
+  }
   if (o.mode === "base") {
     if (o.from) bits.unshift(`BASE off ${o.from}`);
     if (o.delayS !== null) bits.push(`${o.delayS.toFixed(1)} s delay`);

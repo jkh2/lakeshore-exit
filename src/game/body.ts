@@ -33,6 +33,8 @@ export type BodyPose = {
   lean?: number;
   /** Third person: 0..1 tracking, arms swept back and legs straight. */
   trackAmt?: number;
+  /** First person in freefall: 0..1 how full the wingsuit is; arms spread and the arm wings show. */
+  wing?: number;
 };
 
 export type BodyLook = { suit: string; suitDark: string; helmet: string };
@@ -228,6 +230,7 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
     target: new THREE.Vector3(side * 0.36, -0.12, -0.42),
     shoulder: new THREE.Vector3(),
     elbowPos: new THREE.Vector3(),
+    wrist: new THREE.Vector3(),
   }));
   const legs = [-1, 1].map((side) => ({
     side,
@@ -285,6 +288,60 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
     group.add(m);
   }
   for (const m of [helmet, visor, neck, container, tray]) m.visible = third;
+
+  // First person only: the wingsuit's arm wings. The arms are inside the wing, so they take
+  // its color, and the fabric runs from the arm back to the hip. Each wing is a grid: across
+  // the span armpit, elbow and wrist; along the chord stations from the arm to the trailing
+  // edge, so the fabric can bulge where the air fills it and carry a dark stripe at the back.
+  const WING_ORANGE = "#f06a1e";
+  const wingTop = new THREE.MeshStandardMaterial({ color: WING_ORANGE, roughness: 0.7 });
+  const wingMat = new THREE.MeshStandardMaterial({
+    color: "#ffffff",
+    vertexColors: true,
+    roughness: 0.75,
+    side: THREE.DoubleSide,
+  });
+  const CHORD = [0, 0.45, 0.84, 0.87, 1];
+  const BULGE = [0, 1, 0.3, 0.25, 0];
+  const NC = CHORD.length;
+  const WING_INDEX: number[] = [];
+  for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < NC - 1; j++) {
+      const v = i * NC + j;
+      WING_INDEX.push(v, v + NC, v + NC + 1, v, v + NC + 1, v + 1);
+    }
+  }
+  const wings = [-1, 1].map(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3 * NC * 3), 3));
+    const orange = new THREE.Color(WING_ORANGE);
+    const stripe = new THREE.Color("#1f2a3c");
+    const cols = [0, 1, 2].flatMap(() => CHORD.map((_, j) => (j < 3 ? orange : stripe)));
+    g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(cols.flatMap((c) => [c.r, c.g, c.b])), 3));
+    g.setIndex(WING_INDEX);
+    const m = new THREE.Mesh(g, wingMat);
+    m.frustumCulled = false;
+    m.visible = false;
+    group.add(m);
+    geos.push(g);
+    return m;
+  });
+
+  const back = (() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(18), 3));
+    const orange = new THREE.Color(WING_ORANGE);
+    const rig = new THREE.Color("#1f2a3c");
+    const cols = [orange, rig, orange, orange, rig, orange];
+    g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(cols.flatMap((c) => [c.r, c.g, c.b])), 3));
+    g.setIndex([0, 3, 4, 0, 4, 1, 1, 4, 5, 1, 5, 2]);
+    const m = new THREE.Mesh(g, wingMat);
+    m.frustumCulled = false;
+    m.visible = false;
+    group.add(m);
+    geos.push(g);
+    return m;
+  })();
 
   const dialTex = dial();
   const face = new THREE.Mesh(new THREE.CircleGeometry(0.036, 28), new THREE.MeshBasicMaterial({ map: dialTex ?? undefined }));
@@ -380,11 +437,19 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
           tmp.x += Math.sin(pose.time * 29 + s) * flap;
           tmp.y += Math.cos(pose.time * 23 + s * 2) * flap;
         } else if (pose.mode === "freefall") {
+          const wing = pose.wing ?? 0;
           if (pose.reaching) tmp.set(s * 0.3, 0.2, -0.04);
-          else if (pose.forward > 0.4) tmp.set(s * 0.43, -0.04, -0.33);
+          else if (wing > 0) {
+            // Arms spread wide to hold the wings open. The arm on the inside of a turn
+            // drops; a dive sweeps them back, a flare brings them forward.
+            tmp.set(s * 0.37, -0.08, -0.34).lerp(_a.set(s * 0.66, -0.25, -0.26), wing);
+            tmp.y += pose.turn * s * 0.07 * wing;
+            tmp.z += pose.forward * 0.12 * wing;
+            tmp.y -= Math.max(0, -pose.forward) * 0.04 * wing;
+          } else if (pose.forward > 0.4) tmp.set(s * 0.43, -0.04, -0.33);
           else if (pose.forward < -0.4) tmp.set(s * 0.27, -0.44, 0.18);
           else tmp.set(s * 0.37, -0.08, -0.34);
-          const lean = pose.turn * s;
+          const lean = pose.turn * s * (1 - wing);
           tmp.y += lean * 0.08;
           tmp.z += lean * 0.06;
           const flap = Math.min(pose.air / 55, 1) * 0.012;
@@ -416,6 +481,7 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         _d.subVectors(wristTip, arm.elbowPos).normalize();
         // In freefall the wrists bend so the palms face the wind, fingers forward.
         if (!upright && !g) _d.lerp(fingerFwd, 0.55).normalize();
+        arm.wrist.copy(wristTip);
         arm.hand.position.copy(wristTip);
         arm.hand.quaternion.setFromUnitVectors(minusZ, _d);
         arm.hand.rotateZ(-s * 0.5);
@@ -427,6 +493,64 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
           face.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _a);
           needle.rotation.z = -(Math.max(0, pose.altFt) / 12000) * Math.PI * 2;
         }
+      }
+
+      const wingAmt = !third && pose.mode === "freefall" ? (pose.wing ?? 0) : 0;
+      for (let i = 0; i < 2; i++) {
+        const arm = arms[i]!;
+        const m = wings[i]!;
+        m.visible = wingAmt > 0.02;
+        const armMat = wingAmt > 0.5 ? wingTop : suit;
+        arm.upper.material = armMat;
+        arm.fore.material = armMat;
+        arm.elbow.material = armMat;
+        arm.shoulderBall.material = armMat;
+        if (!m.visible) continue;
+        const s = arm.side;
+        const pos = m.geometry.getAttribute("position") as THREE.BufferAttribute;
+        const slack = 1 - wingAmt;
+        const ripple = Math.sin(pose.time * 37 + s) * 0.008 * wingAmt;
+        for (let i = 0; i < 3; i++) {
+          // The arm is the leading edge: shoulder, elbow, wrist. The root rides over the top
+          // of the shoulder, where the suit's back joins it.
+          if (i === 0) _a.set(arm.shoulder.x, arm.shoulder.y + 0.06, arm.shoulder.z + 0.03);
+          else _a.copy(i === 1 ? arm.elbowPos : arm.wrist);
+          // The trailing edge runs from the hip, behind the eyes where the body lies in flight,
+          // out to a hand's width behind the wrist, curving in a little between them.
+          if (i === 0) _b.set(s * 0.24, -0.33, 0.62);
+          else if (i === 2) _b.copy(arm.wrist).add(_c.set(-s * 0.03, -0.02, 0.2));
+          else {
+            _b.copy(arm.wrist).add(_c.set(-s * 0.03, -0.02, 0.2));
+            _b.lerp(_c.set(s * 0.24, -0.33, 0.62), 0.5);
+            _b.x -= s * 0.03;
+            _b.y += ripple;
+          }
+          // Until the suit fills, the fabric hangs slack in toward the arm.
+          _b.lerp(_a, 0.6 * slack);
+          _b.y -= 0.08 * slack;
+          // The middle bulges up where the air fills it.
+          const bulge = [0.04, 0.045, 0.02][i]! * wingAmt;
+          for (let j = 0; j < NC; j++) {
+            _c.copy(_a).lerp(_b, CHORD[j]!);
+            pos.setXYZ(i * NC + j, _c.x, _c.y + BULGE[j]! * bulge, _c.z);
+          }
+        }
+        pos.needsUpdate = true;
+        m.geometry.computeVertexNormals();
+      }
+      back.visible = wingAmt > 0.02;
+      if (back.visible) {
+        // The suit's back between the wing roots, with the rig down the middle.
+        const pos = back.geometry.getAttribute("position") as THREE.BufferAttribute;
+        const sh = arms[0]!.shoulder;
+        pos.setXYZ(0, sh.x, sh.y + 0.06, sh.z + 0.03);
+        pos.setXYZ(1, 0, sh.y + 0.04, sh.z + 0.1);
+        pos.setXYZ(2, -sh.x, sh.y + 0.06, sh.z + 0.03);
+        pos.setXYZ(3, -0.24, -0.33, 0.62);
+        pos.setXYZ(4, 0, -0.28, 0.62);
+        pos.setXYZ(5, 0.24, -0.33, 0.62);
+        pos.needsUpdate = true;
+        back.geometry.computeVertexNormals();
       }
 
       const showLegs = upright || third;
@@ -519,7 +643,7 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
     },
     dispose() {
       geos.forEach((g) => g.dispose());
-      [suit, suitDark, glove, shoe, harness, helmetMat, visorMat, rigMat, trayMat].forEach((m) =>
+      [suit, suitDark, glove, shoe, harness, helmetMat, visorMat, rigMat, trayMat, wingMat, wingTop].forEach((m) =>
         m.dispose(),
       );
       dialTex?.dispose();

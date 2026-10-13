@@ -21,7 +21,7 @@ import {
   WIND_Z,
 } from "./constants";
 import { loadSave, writeSave } from "./save";
-import type { Bridge, Hud, JumpMode, Outcome, Phase } from "./types";
+import type { Bridge, Hud, JumpMode, Outcome, Phase, Suit } from "./types";
 import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
 import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
 import { dressCabin } from "./cabin";
@@ -35,6 +35,7 @@ import { CITY, createSkyline } from "./skyline";
 import { createLife } from "./life";
 import { BODY_R, areaAt, canBaseFrom, createPads, lookAhead, nearestOpen, stepTo } from "./roofs";
 import type { Contact, Solid } from "./solids";
+import { createWing, flyWing, pathPitch, wingFill, type Wing } from "./wingsuit";
 import { SUN_DIR, applyLight, cityTexture, createAtmosphere, createWaterMaterial, streetLights } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
@@ -54,6 +55,8 @@ const RUN_MPS = 4.8;
 const STAND_EYE = 1.5;
 /** Seconds for a BASE canopy to open: a big pilot chute and no bag to wait on. */
 const BASE_OPEN_S = 1.25;
+/** Wingsuit: passing this close to a building counts as a close pass. */
+const PASS_M = 25;
 
 /** Where the pull calls come, for the jump in progress. */
 const DECK = {
@@ -726,6 +729,23 @@ export function mountGame(
   let delayS: number | null = null;
   /** The surface under you while you fly: a roof, or the ground. */
   let floorY = 0;
+  /** The suit for this jump, and while a wingsuit flies (exit to pull) its flight state. */
+  let suit: Suit = "rig";
+  let wing: Wing | null = null;
+  /** Wingsuit flight so far: ground covered, and over the full-suit part, distance and drop. */
+  let flightM = 0;
+  let glideM = 0;
+  let glideDrop = 0;
+  /** The suit is flying, not just falling: from here on its glide counts. */
+  let suitFlying = false;
+  let passes = 0;
+  let closestM: number | null = null;
+  let passMin = Infinity;
+  let passReady = true;
+  let passClear = 0;
+  let proxAcc = 0;
+  /** Where the eyes pointed at the exit, eased into the flight path as the suit fills. */
+  let exitPitch = 0;
   const lzPos = new THREE.Vector3();
   const keys = new Set<string>();
   let qaKeys: Set<string> | null = null;
@@ -742,6 +762,7 @@ export function mountGame(
   const hud: Hud = {
     phase: "menu",
     mode: "skydive",
+    suit: "rig",
     altitudeFt: 12500,
     fallMph: 0,
     groundMph: 0,
@@ -814,6 +835,17 @@ export function mountGame(
     jumpedFrom = null;
     ranOff = false;
     delayS = null;
+    wing = null;
+    flightM = 0;
+    glideM = 0;
+    glideDrop = 0;
+    passes = 0;
+    closestM = null;
+    passMin = Infinity;
+    passReady = true;
+    passClear = 0;
+    lookOffYaw = 0;
+    lookOffPitch = 0;
     audio.resetDeath();
     audio.resume();
   }
@@ -822,6 +854,8 @@ export function mountGame(
     resetJump();
     save.ride = bridge.ride;
     save.roof = bridge.roof;
+    save.suit = bridge.suit;
+    suit = bridge.suit;
     const pad = bridge.ride === "roof" ? (pads.list.find((p) => p.id === bridge.roof) ?? pads.list[0]) : null;
     if (pad) {
       // A few steps back from the edge you came to jump, looking over it.
@@ -900,6 +934,18 @@ export function mountGame(
     if (log.length > 10) log.shift();
   }
 
+  /** What the debrief needs about a wingsuit flight; empty for the standard rig. */
+  function flightFacts() {
+    const winged = suit === "wing";
+    return {
+      suit,
+      flightM: winged ? flightM : null,
+      glide: winged && glideDrop > 30 ? glideM / glideDrop : null,
+      passes: winged ? passes : 0,
+      closestM: winged ? closestM : null,
+    };
+  }
+
   /** Scores the jump and keeps the best. Called once per jump, as it ends. */
   function score(facts: Omit<Outcome, "log" | "reason" | "score">) {
     const result = scoreJump({ ...facts, dockedFt, pullFt, sepM: pullSep, running: ranOff });
@@ -919,6 +965,7 @@ export function mountGame(
     const facts = {
       kind: "impact" as const,
       mode,
+      ...flightFacts(),
       area: "none" as const,
       roof: null,
       padM: null,
@@ -954,6 +1001,7 @@ export function mountGame(
     const facts = {
       kind: water ? ("water" as const) : ("landed" as const),
       mode,
+      ...flightFacts(),
       area,
       roof: roofLabel,
       padM: pad ? Math.hypot(pos.x - pad.x, pos.z - pad.z) : null,
@@ -1003,9 +1051,27 @@ export function mountGame(
     );
     phase = "freefall";
     flying = "none";
-    _v2.set(1, 0, 0).applyQuaternion(plane.quaternion);
-    startFormation(_v2);
+    if (suit === "wing") {
+      // Wingsuiters leave last, after the belly flyers, and fly away on their own.
+      resetFormation();
+      exitTime = simTime;
+      startWing(bodyYaw);
+    } else {
+      _v2.set(1, 0, 0).applyQuaternion(plane.quaternion);
+      startFormation(_v2);
+    }
     persist();
+  }
+
+  function startWing(yaw: number) {
+    wing = createWing(yaw);
+    exitPitch = bodyPitch;
+    lookOffYaw = 0;
+    lookOffPitch = 0;
+    flightM = 0;
+    glideM = 0;
+    glideDrop = 0;
+    suitFlying = false;
   }
 
   function startFormation(out: THREE.Vector3) {
@@ -1103,6 +1169,17 @@ export function mountGame(
     // A BASE rig has no reserve, so the game gives it no malfunctions either.
     const base = mode === "base";
     mal = !base && Math.random() < malChance ? (Math.random() < 0.62 ? "streamer" : "twist") : "none";
+    if (wing) {
+      // The canopy opens along the line you flew; the eyes come back to it.
+      bodyYaw = wing.yaw;
+      bodyPitch = clamp(bodyPitch - lookOffPitch, -1.35, 1.15);
+      lookOffYaw = 0;
+      lookOffPitch = 0;
+      const km = flightM >= 1000 ? `${(flightM / 1000).toFixed(1)} km` : `${Math.round(flightM)} m`;
+      const g = flightFacts().glide;
+      pushLog(`Flew ${km} in the suit${g !== null ? ` · glide ${g.toFixed(1)}` : ""}`);
+      wing = null;
+    }
     heading = bodyYaw;
     if (base) delayS = simTime - exitTime;
     pushLog(
@@ -1171,7 +1248,27 @@ export function mountGame(
     if (p.startsWith("roof")) {
       const pad = pads.list.find((q) => q.id === p.split(":")[1]) ?? pads.list[0];
       resetJump();
+      suit = bridge.suit;
       if (pad) standOnRoof(pad.x, pad.z, pad.yaw, pad.name);
+      return;
+    }
+    if (p === "wing") {
+      // Flying a full wingsuit south along the lakefront, 8,000 ft up.
+      resetJump();
+      suit = "wing";
+      mode = "skydive";
+      phase = "freefall";
+      flying = "none";
+      mal = "none";
+      pos.set(RUN_X - 200, 2440, -1800);
+      bodyYaw = Math.PI;
+      bodyPitch = -0.2;
+      vel.set(WIND_X, -17, 44 + WIND_Z);
+      exitTime = simTime;
+      startWing(Math.PI);
+      if (wing) wing.t = 4;
+      canopy.visible = false;
+      streamer.visible = false;
       return;
     }
     if (p === "padfinal") {
@@ -1345,6 +1442,10 @@ export function mountGame(
     } else if (phase === "canopy" || phase === "down") {
       lookOffYaw = clamp(lookOffYaw - lookDX * sens, -1.35, 1.35);
       lookOffPitch = clamp(lookOffPitch - lookDY * sens, -1.0, 1.5);
+    } else if (phase === "freefall" && wing) {
+      // In a wingsuit the keys fly and the mouse only turns your head.
+      lookOffYaw = clamp(lookOffYaw - lookDX * sens, -1.35, 1.35);
+      lookOffPitch = clamp(lookOffPitch - lookDY * sens, -1.0, 1.0);
     } else if (phase === "freefall" || phase === "deploying" || phase === "malfunction") {
       bodyYaw -= lookDX * sens;
       bodyPitch = clamp(bodyPitch - lookDY * sens, -1.35, 1.15);
@@ -1410,7 +1511,9 @@ export function mountGame(
     if (reserveArmed && phase === "freefall" && (input.reserveEdge || input.pullEdge)) pullReserve();
     else if (phase === "freefall" && !reserveArmed && input.pullEdge) pullMain();
 
-    if (phase === "freefall" && mode === "base") {
+    if (phase === "freefall" && wing) {
+      flyTheSuit(dt, input);
+    } else if (phase === "freefall" && mode === "base") {
       baseFall(dt, input.turn, arch, dive);
     } else if (phase === "freefall" || (phase === "malfunction" && mal === "streamer") || (phase === "deploying" && mal === "streamer")) {
       bodyYaw += input.turn * 1.25 * dt;
@@ -1508,8 +1611,10 @@ export function mountGame(
     }
 
     shock *= Math.exp(-3.4 * dt);
-    const bankTarget = -input.turn * 0.5;
-    bank += (bankTarget - bank) * (1 - Math.exp(-6 * dt));
+    if (!wing) {
+      const bankTarget = -input.turn * 0.5;
+      bank += (bankTarget - bank) * (1 - Math.exp(-6 * dt));
+    }
     _prev.copy(pos);
     pos.addScaledVector(vel, dt);
     const hit = solids.contact(_prev, pos, BODY_R);
@@ -1655,7 +1760,52 @@ export function mountGame(
     pushLog(`Off ${roofName} at ${ft} ft · ${running ? "running exit" : "stepped off"}`);
     phase = "freefall";
     flying = "none";
+    if (suit === "wing") startWing(localYaw);
     persist();
+  }
+
+  /** Wingsuit flight: the suit flies, the eyes follow the flight path, and close passes count. */
+  function flyTheSuit(dt: number, input: ReturnType<typeof sample>) {
+    if (!wing) return;
+    const fill = flyWing(wing, vel, WIND_X, WIND_Z, input.turn, input.forward, dt);
+    const gs = Math.hypot(vel.x, vel.z);
+    flightM += gs * dt;
+    if (!suitFlying && fill > 0.98 && gs > -vel.y) suitFlying = true;
+    if (suitFlying) {
+      glideM += gs * dt;
+      glideDrop -= vel.y * dt;
+    }
+    // Eyes on the horizon a little below the flight path, rolled with the bank.
+    const flyPitch = clamp(pathPitch(vel, WIND_X, WIND_Z) * 0.7 - 0.1, -1.2, 0.5);
+    bodyYaw = wing.yaw + lookOffYaw;
+    bodyPitch = clamp(THREE.MathUtils.lerp(exitPitch, flyPitch, fill) + lookOffPitch, -1.4, 1.2);
+    bank = wing.bank * 0.85;
+
+    proxAcc += dt;
+    if (proxAcc < 0.05) return;
+    proxAcc = 0;
+    const air = Math.hypot(vel.x - WIND_X, vel.y, vel.z - WIND_Z);
+    const d = solids.nearest(pos.x, pos.y, pos.z, PASS_M + 5);
+    // Only once the suit is flying: falling past the tower you just left is not a pass.
+    if (d <= PASS_M && air > 25 && suitFlying) {
+      if (passReady) {
+        passReady = false;
+        passMin = d;
+        passes += 1;
+        audio.whoosh(clamp(1.3 - d / PASS_M, 0.4, 1));
+      }
+      passMin = Math.min(passMin, d);
+      closestM = closestM === null ? passMin : Math.min(closestM, passMin);
+      flashText = `CLOSE PASS · ${Math.round(passMin)} M`;
+      flashUntil = simTime + 1.2;
+      passClear = 0;
+    } else if (!passReady) {
+      passClear += 0.05;
+      if (passClear > 0.8) {
+        passReady = true;
+        pushLog(`Close pass · ${Math.round(passMin)} m at ${Math.round(air * MPH_PER_MPS)} mph`);
+      }
+    }
   }
 
   /**
@@ -1695,12 +1845,19 @@ export function mountGame(
     if (top) {
       pos.y = s.y1;
       if (phase === "canopy") finishDown(s);
+      else if (wing) finishImpact("Flew the suit into a rooftop");
       else finishImpact(phase === "freefall" ? "Went in on a rooftop" : "No open canopy over a roof");
       return;
     }
     pos.x = _prev.x;
     pos.z = _prev.z;
-    finishImpact(phase === "canopy" ? "Flew into the side of a building" : "Hit the side of a building");
+    finishImpact(
+      phase === "canopy"
+        ? "Flew into the side of a building"
+        : wing
+          ? "Flew the suit into a building"
+          : "Hit the side of a building",
+    );
   }
 
   /** The closest marked roof below you, within reach of a canopy. */
@@ -1741,6 +1898,10 @@ export function mountGame(
 
   function poseName(forward: number) {
     if (phase !== "freefall") return phase === "canopy" ? "CANOPY" : "";
+    if (wing) {
+      if (wingFill(wing) < 0.9) return "SUIT FILLING";
+      return wing.pitch > 0.35 ? "DIVE" : wing.pitch < -0.35 ? "FLARE" : "GLIDE";
+    }
     if (forward < -0.4 && bodyPitch < -0.45) return "TRACK";
     if (forward < -0.4) return "DIVE";
     if (forward > 0.4) return "ARCH";
@@ -1792,7 +1953,14 @@ export function mountGame(
     } else if (phase === "roof") {
       prompt = roofPrompt();
     } else if (phase === "freefall") {
-      if (mode === "base") prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${coarse ? "TAP PULL" : "SPACE PULLS"}`;
+      const pullKey = coarse ? "TAP PULL" : "SPACE PULLS";
+      if (wing) {
+        const down = -vel.y;
+        const glide = Math.hypot(vel.x, vel.z) / Math.max(0.1, down);
+        if (wingFill(wing) < 0.6) prompt = "LET THE SUIT FILL";
+        else if (down < 0.5) prompt = `CLIMBING · ${pullKey}`;
+        else prompt = `GLIDE ${glide > 9.9 ? "10+" : glide.toFixed(1)} · ${pullKey}`;
+      } else if (mode === "base") prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${coarse ? "TAP PULL" : "SPACE PULLS"}`;
       else if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
       else if (docked) prompt = "DOCKED · HOLD ON UNTIL BREAK-OFF";
       else if (formation.active()) {
@@ -1872,6 +2040,7 @@ export function mountGame(
     const projected = doorWorld.project(camera);
     hud.phase = phase;
     hud.mode = mode;
+    hud.suit = suit;
     hud.altitudeFt = altFt;
     hud.fallMph = Math.max(0, -vel.y) * MPH_PER_MPS;
     hud.groundMph =
@@ -1996,7 +2165,9 @@ export function mountGame(
       camera.position.y += Math.sin(simTime * 41) * shock * 0.07;
     }
     camera.quaternion.setFromEuler(_e);
-    const targetFov = phase === "freefall" || phase === "malfunction" ? 74 + Math.min(air, 80) * 0.1 : 72;
+    let targetFov = phase === "freefall" || phase === "malfunction" ? 74 + Math.min(air, 80) * 0.1 : 72;
+    // A flying suit gets a wider view, for the speed and to keep the wings in sight.
+    if (wing && phase === "freefall") targetFov += 6 * wingFill(wing);
     if (Math.abs(camera.fov - targetFov) > 0.25) {
       camera.fov += (targetFov - camera.fov) * 0.08;
       camera.updateProjectionMatrix();
@@ -2004,6 +2175,7 @@ export function mountGame(
   }
 
   const bodyFrame = new THREE.Matrix4();
+  const shiftM = new THREE.Matrix4();
   const bodyQ = new THREE.Quaternion();
   const bodyE = new THREE.Euler();
   const bodyInv = new THREE.Matrix4();
@@ -2024,6 +2196,7 @@ export function mountGame(
     altFt: 0,
     time: 0,
     reaching: false,
+    wing: 0,
   };
 
   function poseBody(dt: number) {
@@ -2040,6 +2213,7 @@ export function mountGame(
     p.gestureT = simTime - gestureStart;
     p.gesture = gesture && p.gestureT < 1.2 ? gesture : null;
     p.reaching = phase === "deploying" || (phase === "malfunction" && mal === "twist");
+    p.wing = wing && phase === "freefall" ? wingFill(wing) : 0;
     if (phase === "menu" || phase === "impact") {
       p.mode = "hidden";
     } else if (phase === "cabin") {
@@ -2085,7 +2259,16 @@ export function mountGame(
       }
     } else {
       p.mode = "freefall";
-      bodyFrame.compose(camera.position, camera.quaternion, one);
+      if (wing && phase === "freefall") {
+        // The body flies the suit's line, nose a little above where the eyes look; looking
+        // around turns only the head, so a glance to the side shows the wing.
+        bodyE.set(bodyPitch - lookOffPitch + 0.2 * p.wing, bodyYaw - lookOffYaw, bank, "YXZ");
+        bodyQ.setFromEuler(bodyE);
+        bodyFrame.compose(camera.position, bodyQ, one);
+        // The view rides a little behind the head, like a helmet camera, so the spread arms
+        // show in the corners and a look down or to the side takes in the whole suit.
+        bodyFrame.multiply(shiftM.makeTranslation(0, 0, -0.25 * p.wing));
+      } else bodyFrame.compose(camera.position, camera.quaternion, one);
       if (docked && phase === "freefall" && !p.gesture) {
         // Hold the neighbors' hands either side of the slot.
         bodyInv.copy(bodyFrame).invert();
@@ -2151,7 +2334,15 @@ export function mountGame(
     else if (command === "again") backToMenu();
     else if (command === "retry") begin();
     else if (command === "base") baseFromHere();
-    lastInput = sample();
+    const input = sample();
+    if (lastInput) {
+      // A frame too short for a physics step must not swallow a key press: carry it over.
+      input.jumpEdge ||= lastInput.jumpEdge;
+      input.pullEdge ||= lastInput.pullEdge;
+      input.cutEdge ||= lastInput.cutEdge;
+      input.reserveEdge ||= lastInput.reserveEdge;
+    }
+    lastInput = input;
     acc += frameDt;
     let guard = 0;
     while (acc >= 1 / 60 && guard < 5) {
