@@ -37,6 +37,7 @@ import { scoreJump } from "./score";
 import { createShadows, type ShadowCaster } from "./shadow";
 import { createStreaks } from "./streaks";
 import { CITY, createSkyline } from "./skyline";
+import { createAirshow } from "./airshow";
 import { createLife } from "./life";
 import { BODY_R, areaAt, canBaseFrom, createPads, lookAhead, nearestOpen, stepTo } from "./roofs";
 import {
@@ -443,7 +444,13 @@ export function mountGame(
   scene.add(road);
 
   const skyline = createSkyline(scene, { aniso, coarse, onTop, windows: look.windows, streets: look.streets });
-  const life = createLife(scene, { coarse, night: look.streets > 0, onTop });
+  const life = createLife(scene, { coarse, night: look.streets > 0, sunColor: look.sunColor, onTop });
+  const airshow = createAirshow(scene, { night: look.streets > 0, sunColor: look.sunColor });
+  /** When the title screen's next jet team pass starts. */
+  let showNext = 0;
+  /** Whether the jet team still has a pass to fly for this jump, and whether it ever has. */
+  let showDue = true;
+  let showFlown = false;
   const solids = skyline.solids;
   const pads = createPads(scene, solids, { onTop, night: look.streets > 0 });
 
@@ -904,6 +911,8 @@ export function mountGame(
 
   /** Clears everything one jump leaves behind. */
   function resetJump() {
+    // Your first canopy ride gets the jet team, and about half of them after that.
+    showDue = !showFlown || Math.random() < 0.5;
     outcome = null;
     log.length = 0;
     mal = "none";
@@ -3039,6 +3048,9 @@ export function mountGame(
       });
     }
 
+    // The traffic and the air show as they were at that moment.
+    life.update(t);
+    airshow.update(t, camera.position);
     formation.play(f);
     formation.draw(dt, t);
     course.rewind(t);
@@ -3063,6 +3075,8 @@ export function mountGame(
       heli.group.visible ? 0.55 * near(heli.group.position, 700) : 0,
       balloon.group.visible ? f[A.burn]! * near(balloon.group.position, 350) : 0,
     );
+    const show = airshow.noise(camera.position);
+    audio.traffic(show.jets, show.props);
     const close = along ? 1 : near(actorFeet.fromArray(f, A.pos), 160);
     if (falling) audio.update(rush * 0.32 * close + 0.02, 0, f[A.air]!);
     else if (shownPhase === "canopy") audio.update(0.045, 0, 12);
@@ -3079,9 +3093,26 @@ export function mountGame(
     return true;
   }
 
+  /** The jet team's pull-up and burst, if a pass flew during this tape, in tape time. */
+  function showOnTape() {
+    const m = airshow.highlight(rec.t0 + (rec.frames[0]?.[PLAYER.at.t] ?? 0), simTime);
+    const t0 = rec.t0;
+    return (
+      m && {
+        from: m.from - t0,
+        to: m.to - t0,
+        team: (t: number, out: THREE.Vector3) => airshow.team(t + t0, out),
+      }
+    );
+  }
+
   function startReplay() {
     if (!outcome || director) return;
-    director = createDirector(rec, { clear: clearCam, rings: ringsOn });
+    director = createDirector(rec, {
+      clear: clearCam,
+      rings: ringsOn,
+      show: showOnTape(),
+    });
     if (!director) return;
     formation.record(liveCrew);
     const down = rec.frames.find((fr) => PHASES[fr[PLAYER.at.phase]!] === "down");
@@ -3129,6 +3160,26 @@ export function mountGame(
     streaks.update(camera.position, airVel, reduce ? 0 : amount);
   }
 
+  /**
+   * The jet team runs down the shore every couple of minutes behind the title screen, and on
+   * your first canopy ride and about half of them after that, while you are up there to watch.
+   */
+  function skyShow() {
+    if (phase === "menu" && simTime >= showNext) {
+      // The first one is already on its way in when the game opens.
+      airshow.pass(showNext === 0 ? simTime - 25 : simTime);
+      showNext = simTime + 150;
+    }
+    // Under canopy, as soon as the sky is clear of any earlier pass and there is height
+    // left to watch it.
+    if (phase === "canopy" && showDue && pos.y > 350 && airshow.pass(simTime)) {
+      showDue = false;
+      showFlown = true;
+      pushLog("Air show · the jet team is coming down the shore");
+    }
+    airshow.update(simTime, camera.position);
+  }
+
   function audioMix() {
     audio.setMuted(bridge.muted);
     // The rotor and the burner, fading with distance once you have left them behind.
@@ -3138,6 +3189,8 @@ export function mountGame(
       live && heli.group.visible ? 0.55 * near(heli.group.position, 700) : 0,
       live && balloon.group.visible ? burn * near(balloon.group.position, 350) : 0,
     );
+    const show = airshow.noise(camera.position);
+    audio.traffic(live ? show.jets : 0, live ? show.props : 0);
     const air = Math.hypot(vel.x, vel.y, vel.z);
     if (phase === "impact") audio.update(0, 0, 0);
     else if (phase === "menu") audio.update(0.02, 0.045, 20);
@@ -3201,6 +3254,7 @@ export function mountGame(
     if (director && !playReplay(frameDt)) stopReplay();
     if (!director) {
       frameCamera();
+      skyShow();
       airFx();
       poseBody(frameDt);
       formation.draw(frameDt, simTime);
@@ -3381,6 +3435,7 @@ export function mountGame(
     body.dispose();
     actor.dispose();
     formation.dispose();
+    airshow.dispose();
     normalTex.dispose();
     if (window.__controlsTest === controlsTest) delete window.__controlsTest;
     const geos = new Set<THREE.BufferGeometry>();

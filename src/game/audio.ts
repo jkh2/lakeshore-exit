@@ -6,6 +6,9 @@ export function createAudio() {
   let engineGain: GainNode | null = null;
   let rotorGain: GainNode | null = null;
   let burnerGain: GainNode | null = null;
+  let jetGain: GainNode | null = null;
+  let jetFilter: BiquadFilterNode | null = null;
+  let propGain: GainNode | null = null;
   let muted = false;
   let yelled = false;
 
@@ -96,6 +99,40 @@ export function createAudio() {
     burnBp.connect(burnerGain);
     burnerGain.connect(master);
     burnSrc.start(0, 1.1);
+
+    // Jets going over: a deep roar that opens up into a tearing hiss as they come close.
+    const jetSrc = ctx.createBufferSource();
+    jetSrc.buffer = buf;
+    jetSrc.loop = true;
+    jetFilter = ctx.createBiquadFilter();
+    jetFilter.type = "lowpass";
+    jetFilter.frequency.value = 300;
+    jetFilter.Q.value = 0.7;
+    jetGain = ctx.createGain();
+    jetGain.gain.value = 0;
+    jetSrc.connect(jetFilter);
+    jetFilter.connect(jetGain);
+    jetGain.connect(master);
+    jetSrc.start(0, 0.3);
+
+    // A propeller droning by: two buzzy notes a little apart, beating against each other.
+    const p1 = ctx.createOscillator();
+    const p2 = ctx.createOscillator();
+    p1.type = "sawtooth";
+    p2.type = "sawtooth";
+    p1.frequency.value = 92;
+    p2.frequency.value = 95.5;
+    const propLp = ctx.createBiquadFilter();
+    propLp.type = "lowpass";
+    propLp.frequency.value = 520;
+    propGain = ctx.createGain();
+    propGain.gain.value = 0;
+    p1.connect(propLp);
+    p2.connect(propLp);
+    propLp.connect(propGain);
+    propGain.connect(master);
+    p1.start();
+    p2.start();
     return ctx;
   }
 
@@ -149,6 +186,17 @@ export function createAudio() {
         if (!ctx || !rotorGain || !burnerGain) return;
         rotorGain.gain.setTargetAtTime(muted ? 0 : rotor * 0.9, ctx.currentTime, 0.2);
         burnerGain.gain.setTargetAtTime(muted ? 0 : burner * 0.55, ctx.currentTime, 0.08);
+      } catch {
+        /* ignore */
+      }
+    },
+    /** Air show jets and the propellers of the banner plane and the airship, each 0..1. */
+    traffic(jets: number, props: number) {
+      try {
+        if (!ctx || !jetGain || !jetFilter || !propGain) return;
+        jetGain.gain.setTargetAtTime(muted ? 0 : jets * 0.5, ctx.currentTime, 0.25);
+        jetFilter.frequency.setTargetAtTime(240 + jets * 2200, ctx.currentTime, 0.25);
+        propGain.gain.setTargetAtTime(muted ? 0 : props * 0.16, ctx.currentTime, 0.3);
       } catch {
         /* ignore */
       }

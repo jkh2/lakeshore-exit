@@ -33,6 +33,7 @@ export type ShotKind =
   | "opening"
   | "canopyFront"
   | "canopyWide"
+  | "airshow"
   | "canopySide"
   | "landing"
   | "after";
@@ -54,6 +55,7 @@ const TITLES: Record<ShotKind, string> = {
   opening: "OPENING",
   canopyFront: "UNDER CANOPY",
   canopyWide: "UNDER CANOPY",
+  airshow: "AIR SHOW",
   canopySide: "UNDER CANOPY",
   landing: "LANDING",
   after: "DOWN",
@@ -74,6 +76,7 @@ const FOV: Record<ShotKind, number> = {
   opening: 60,
   canopyFront: 58,
   canopyWide: 45,
+  airshow: 64,
   canopySide: 55,
   landing: 48,
   after: 55,
@@ -123,6 +126,8 @@ export type DirectorOpts = {
   /** Moves `cam` toward `subject` until it is out of every building and above the ground. */
   clear: (cam: THREE.Vector3, subject: THREE.Vector3) => void;
   rings: boolean;
+  /** The jet team's pull-up and burst, if a pass flew while you were in the air. */
+  show: { from: number; to: number; team: (t: number, out: THREE.Vector3) => boolean } | null;
 };
 
 const AIR = new Set(["freefall", "deploying", "malfunction", "canopy", "down", "impact"]);
@@ -195,8 +200,15 @@ export function createDirector(tape: Tape, opts: DirectorOpts): Director | null 
     cut("opening", Math.min(tOpen + 2.4, approach));
     cut("canopyFront", Math.min(cursor + 6, approach));
     const wideEnd = approach - 5;
+    const show = opts.show;
+    if (show && show.from > cursor && show.to < wideEnd - 1) {
+      // The jet team comes by: the ride around it in two time-lapses, and the show itself.
+      cut("canopyWide", show.from, Math.max(2, (show.from - cursor) / 4.5));
+      cut("airshow", show.to, 1.25);
+      if (wideEnd - cursor > 4) cut("canopyWide", wideEnd, Math.max(2, (wideEnd - cursor) / 4.5));
+    }
     // The long middle of the canopy ride goes by in about nine seconds.
-    if (wideEnd - cursor > 8) cut("canopyWide", wideEnd, Math.max(2, (wideEnd - cursor) / 9));
+    else if (wideEnd - cursor > 8) cut("canopyWide", wideEnd, Math.max(2, (wideEnd - cursor) / 9));
     cut("canopySide", approach);
     cut("landing", impact ? tLand + 0.3 : tLand + 0.8, 1, impact ? "IMPACT" : undefined);
     if (!impact) cut("after", end);
@@ -506,6 +518,27 @@ export function createDirector(tape: Tape, opts: DirectorOpts): Director | null 
           want.copy(p).add(anchor.set(Math.cos(a) * 30, 11, Math.sin(a) * 30));
           aimAt.copy(p).addScaledVector(UP, 2);
           k = 3 * shot.speed;
+          break;
+        }
+        case "airshow": {
+          // Over your shoulder: your canopy, and beyond it the jet team pulling up and bursting.
+          if (!opts.show?.team(t, anchorLook)) anchorLook.copy(p).addScaledVector(dir, 100);
+          tmp.subVectors(anchorLook, p);
+          // Never so steep that your canopy leaves the frame, and the camera drops below you to
+          // look up at the burst, or rises to look down on the run in.
+          const level = Math.max(1, Math.hypot(tmp.x, tmp.z));
+          const pitch = THREE.MathUtils.clamp(tmp.y / level, -0.35, 0.7);
+          tmp.y = pitch * level;
+          aimAt.copy(tmp).setLength(80).add(subject);
+          tmp.y = 0;
+          if (tmp.lengthSq() < 1) tmp.copy(dir);
+          tmp.normalize();
+          want
+            .copy(p)
+            .addScaledVector(tmp, -15)
+            .add(anchor.set(-tmp.z, 0, tmp.x).multiplyScalar(4))
+            .addScaledVector(UP, 1.5 - pitch * 7);
+          k = 3;
           break;
         }
         case "canopySide":

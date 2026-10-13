@@ -1,11 +1,19 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { DZ_X, DZ_Z, SHORE_X } from "./constants";
+import {
+  airliner as airlinerGeo,
+  airlinerLights,
+  contrail,
+  lightPlane,
+  propDisk,
+} from "./aircraft";
 import { CITY, OPEN_GROUND } from "./skyline";
 import { rng } from "./world";
 
 // The city going about its evening: traffic on Lake Shore Drive and the streets, boats on the
-// lake, airliners crossing high over the water, and people on the beach and the lakefront trail.
+// lake, airliners crossing over the water with contrails high above, light planes along the
+// shore, and people on the beach and the lakefront trail.
 // Everything moves on the GPU: each instance has a start point and heading in its matrix and
 // a speed, path length and phase in `aMove`, and the vertex shader slides it along its path
 // from the clock, so thousands of cars cost no work per frame on the CPU.
@@ -233,6 +241,8 @@ export function createLife(
   opts: {
     coarse: boolean;
     night: boolean;
+    /** The sunlight's color, which tints the contrails. */
+    sunColor: string;
     onTop: (m: THREE.Material, k: number) => THREE.Material;
   },
 ): Life {
@@ -574,17 +584,29 @@ export function createLife(
     { geo: wake(70, 3.4, 15), mat: foamMat },
   ]);
 
-  // ---- Airliners over the lakefront ----
-  const jet = merge([
-    box(3.6, 3.6, 38, 0, 0, 0, [0.96, 0.97, 0.98]),
-    box(34, 0.5, 6, 0, -0.6, 1, [0.82, 0.84, 0.86]),
-    box(12, 0.35, 3.2, 0, 0.6, 17, [0.82, 0.84, 0.86]),
-    box(0.4, 6.5, 4, 0, 4, 17.5, [0.2, 0.3, 0.6]),
-    box(2.2, 2.2, 4.4, -6.5, -2, -1, [0.7, 0.72, 0.75]),
-    box(2.2, 2.2, 4.4, 6.5, -2, -1, [0.7, 0.72, 0.75]),
-  ]);
-  // Arrivals come in low off the lake toward O'Hare and Midway; departures climb out east.
-  // Paths are 60 km long, staggered so one is usually somewhere over the lakefront.
+  // ---- Aircraft ----
+  const jetMat = moving(
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.3 }),
+    time,
+    "jet",
+  );
+  const liveryMat = moving(
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.4, metalness: 0.2 }),
+    time,
+    "livery",
+  );
+  const navMat = moving(
+    new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }),
+    time,
+    "nav",
+  );
+  const airliner = airlinerGeo();
+  const LIVERY = ["#1d3f8f", "#c8202f", "#0f6e8c", "#e2a400", "#5b2a86", "#1f7a44", "#20242b"].map(
+    hex,
+  );
+  // Arrivals come in low off the lake toward O'Hare and Midway; departures climb out east; a
+  // few run north and south along the shore. Paths are 60 km long, staggered so one is usually
+  // somewhere over the lakefront.
   const jets: Mover[] = [
     { x: 30000, y: 1250, z: -2600, yaw: Math.PI / 2, speed: 95, span: 60000, phase: 0 },
     {
@@ -599,35 +621,95 @@ export function createLife(
     { x: 30000, y: 1700, z: -9000, yaw: Math.PI / 2 + 0.03, speed: 110, span: 60000, phase: 40000 },
     { x: -30000, y: 3200, z: 12000, yaw: -Math.PI / 2, speed: 160, span: 60000, phase: 8000 },
     { x: 30000, y: 1500, z: 2500, yaw: Math.PI / 2 - 0.02, speed: 100, span: 60000, phase: 52000 },
+    { x: 6000, y: 2600, z: -30000, yaw: Math.PI, speed: 140, span: 60000, phase: 30000 },
+    { x: 3500, y: 3900, z: 30000, yaw: 0.04, speed: 150, span: 60000, phase: 14000 },
+    { x: -30000, y: 950, z: -6000, yaw: -Math.PI / 2 + 0.04, speed: 88, span: 60000, phase: 46000 },
   ];
-  fleet(root, jets, [
+  // High overhead, cruising between the coasts with contrails behind.
+  const cruisers: Mover[] = [
+    { x: 70000, y: 10600, z: -26000, yaw: Math.PI / 2 + 0.38, speed: 235, span: 150000, phase: 0 },
     {
-      geo: jet,
+      x: -70000,
+      y: 11200,
+      z: 9000,
+      yaw: -Math.PI / 2 + 0.22,
+      speed: 250,
+      span: 150000,
+      phase: 62000,
+    },
+    { x: 26000, y: 10900, z: 70000, yaw: -0.36, speed: 240, span: 150000, phase: 104000 },
+  ];
+  for (const j of [...jets, ...cruisers]) j.color = pick(r, LIVERY);
+  for (const list of [jets, cruisers]) {
+    fleet(root, list, [
+      { geo: airliner.body, mat: jetMat },
+      { geo: airliner.colors, mat: liveryMat, tint: true },
+      ...(night ? [{ geo: airlinerLights(), mat: navMat }] : []),
+    ]);
+  }
+  const trailTint = new THREE.Color(opts.sunColor).lerp(new THREE.Color(1, 1, 1), 0.55);
+  if (night) trailTint.multiplyScalar(0.62);
+  fleet(root, cruisers, [
+    {
+      geo: contrail(2600),
       mat: moving(
-        new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.3 }),
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          color: trailTint,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          fog: false,
+        }),
         time,
-        "jet",
+        "contrail",
       ),
     },
   ]);
-  if (night) {
-    const nav = merge([
-      box(0.9, 0.9, 0.9, -17, -0.6, 1, [1, 0.1, 0.08]),
-      box(0.9, 0.9, 0.9, 17, -0.6, 1, [0.1, 1, 0.3]),
-      box(0.8, 0.8, 0.8, 0, 7.4, 19, [1, 1, 1]),
-      box(0.7, 0.4, 0.7, 0, -1.9, 0, [1, 0.15, 0.1]),
-    ]);
-    fleet(root, jets, [
-      {
-        geo: nav,
-        mat: moving(
-          new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }),
-          time,
-          "nav",
-        ),
-      },
-    ]);
-  }
+  // Light planes up and down the lakefront corridor, a thousand-odd feet over the water.
+  const small = lightPlane();
+  const flyers: Mover[] = [
+    { x: 900, y: 330, z: 4000, yaw: 0, speed: 52, span: 16000, phase: 0, pingpong: true },
+    {
+      x: 1500,
+      y: 450,
+      z: -12000,
+      yaw: Math.PI,
+      speed: 48,
+      span: 16000,
+      phase: 9000,
+      pingpong: true,
+    },
+    { x: 2200, y: 380, z: 4000, yaw: 0, speed: 55, span: 16000, phase: 21000, pingpong: true },
+    {
+      x: 1200,
+      y: 520,
+      z: -12000,
+      yaw: Math.PI,
+      speed: 50,
+      span: 16000,
+      phase: 27000,
+      pingpong: true,
+    },
+  ];
+  for (const l of flyers) l.color = pick(r, LIVERY);
+  fleet(root, flyers, [
+    { geo: small.body, mat: jetMat },
+    { geo: small.colors, mat: liveryMat, tint: true },
+    {
+      geo: propDisk(),
+      mat: moving(
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+        time,
+        "prop",
+      ),
+    },
+  ]);
 
   // ---- People ----
   const skinPart = merge([

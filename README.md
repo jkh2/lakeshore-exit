@@ -39,4 +39,6 @@ The dev server listens on port 8080.
 
 The lakefront is at true scale around the drop zone at 12th Street Beach. Willis Tower stands about 2.4 km to the northwest, the Hancock 4 km up the shore and Navy Pier reaches a kilometer into the lake 3 km north. Twenty-three landmark towers sit at their real latitude and longitude, measured from the lake edge because the game's shore is straight. Grant Park, Buckingham Fountain, the river and its branches, Monroe Harbor's moored boats, Museum Campus, Soldier Field and the Centennial Wheel are there too. Everything is drawn in code; `src/game/skyline.ts` holds the places and the heights.
 
+The sky is busy too: airliners passing low and cruising high with contrails, light planes along the shore, a blimp lapping the lakefront, a banner plane over the beach, and now and then an air-show jet team that runs down the shore trailing smoke in the Chicago flag's colors and bursts over the beach. The jump replay gives the team its own shot. See `src/game/airshow.ts` and `src/game/life.ts`.
+
 Best beach landing is saved in the browser.
