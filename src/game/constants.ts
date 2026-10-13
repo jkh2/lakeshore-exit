@@ -20,6 +20,10 @@ export const WIND_X = -4.2;
 export const WIND_Z = 0.35;
 
 export const PLANE_MPS = 46;
+/** The green light holds while the plane is within this many meters of the spot. */
+export const GREEN_HALF = 280;
+/** Seconds from boarding to the green light. */
+export const GREEN_IN = 15;
 
 export const SAVE_KEY = "lakeshore-exit-v1";
 

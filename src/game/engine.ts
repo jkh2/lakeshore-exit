@@ -6,6 +6,8 @@ import {
   DZ_X,
   DZ_Z,
   FT_PER_M,
+  GREEN_HALF,
+  GREEN_IN,
   HARD_DECK_FT,
   MPH_PER_MPS,
   PLANE_MPS,
@@ -27,6 +29,7 @@ import { scoreJump } from "./score";
 import { createShadows, type ShadowCaster } from "./shadow";
 import { createStreaks } from "./streaks";
 import { CITY, createSkyline } from "./skyline";
+import { createLife } from "./life";
 import { SUN_DIR, applyLight, cityTexture, createAtmosphere, createWaterMaterial, streetLights } from "./world";
 
 type TapeRef = { current: HTMLCanvasElement | null };
@@ -392,6 +395,7 @@ export function mountGame(
   scene.add(road);
 
   const skyline = createSkyline(scene, { aniso, coarse, onTop, windows: look.windows, streets: look.streets });
+  const life = createLife(scene, { coarse, night: look.streets > 0, onTop });
 
   const verge = new THREE.Mesh(groundGeo(-10, 30, -WORLD, WORLD, 0.09), onTop(grassMat.clone(), 2));
   verge.frustumCulled = false;
@@ -471,23 +475,6 @@ export function mountGame(
   scene.add(tent);
   for (let i = 0; i < 3; i++) {
     box(scene, 5.2, 1.8, 2.1, DZ_X - 8 + i * 7, 0.9, DZ_Z - 18, i === 1 ? redM : dark);
-  }
-
-  const boats: THREE.Group[] = [];
-  for (let i = 0; i < 4; i++) {
-    const b = new THREE.Group();
-    box(b, 16, 1.4, 4.2, 0, 0.7, 0, white);
-    box(b, 5, 2.4, 3.2, -1.5, 2.1, 0, dark);
-    const wake = new THREE.Mesh(
-      new THREE.PlaneGeometry(34, 2.4),
-      new THREE.MeshBasicMaterial({ color: "#e7f2f4", transparent: true, opacity: 0.4, depthWrite: false }),
-    );
-    wake.rotation.x = -Math.PI / 2;
-    wake.position.set(-22, 0.2, 0);
-    b.add(wake);
-    b.position.set(940 + i * 170, 0.4, -200 + i * 260);
-    scene.add(b);
-    boats.push(b);
   }
 
   const plane = new THREE.Group();
@@ -759,9 +746,11 @@ export function mountGame(
   }
 
   function resetRun() {
+    // Board on the jump run, GREEN_IN seconds short of the green light.
+    const start = path[0] ?? new THREE.Vector3();
     seg = 0;
-    segDist = 0;
-    plane.position.copy(path[0] ?? new THREE.Vector3());
+    segDist = Math.max(0, DZ_Z - GREEN_HALF - GREEN_IN * PLANE_MPS - start.z);
+    plane.position.set(start.x, start.y, start.z + segDist);
     planeYaw = Math.PI;
   }
 
@@ -1202,15 +1191,10 @@ export function mountGame(
     waterUniforms.uTime.value = simTime;
     waterUniforms.uCam.value.copy(camera.position);
     skyline.update(dt);
+    life.update(simTime);
     sock.rotation.y = Math.sin(simTime * 7) * 0.12;
     (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity =
       Math.sin(simTime * 8) > 0.4 ? 2 : 0.15;
-    for (let i = 0; i < boats.length; i++) {
-      const boat = boats[i];
-      if (!boat) continue;
-      boat.position.z += dt * (6 + i);
-      if (boat.position.z > 1800) boat.position.z = -1100;
-    }
 
     if (!input) return;
     const sens = 0.00215;
@@ -1443,7 +1427,7 @@ export function mountGame(
 
   function southboundLight(dir: THREE.Vector3) {
     const onRun = Math.abs(plane.position.x - RUN_X) < 90 && dir.z > 0.55;
-    green = onRun && Math.abs(plane.position.z - DZ_Z) < 280;
+    green = onRun && Math.abs(plane.position.z - DZ_Z) < GREEN_HALF;
     if (green && !wasGreen && phase === "cabin") {
       // The jump buzzer, and the bar starts up its posts.
       audio.beep(660, 0.22, 0.07);
@@ -1537,13 +1521,13 @@ export function mountGame(
     spotShort = "";
     if (phase === "cabin" || phase === "menu") {
       const onLine = Math.abs(plane.position.x - RUN_X) < 90 && planeVel.z > 0.5 * PLANE_MPS * 0.5;
-      const secs = Math.max(0, Math.round((-280 - plane.position.z) / PLANE_MPS));
+      const secs = Math.max(0, Math.round((DZ_Z - GREEN_HALF - plane.position.z) / PLANE_MPS));
       if (green) spot = spotShort = "GO";
       else if (!onLine) spot = spotShort = "GO-AROUND";
-      else if (plane.position.z < -280) {
+      else if (plane.position.z < DZ_Z - GREEN_HALF) {
         spot = `GREEN IN ${secs}s`;
         spotShort = `${secs}s`;
-      } else if (plane.position.z > 280) {
+      } else if (plane.position.z > DZ_Z + GREEN_HALF) {
         spot = "PAST THE SPOT";
         spotShort = "PAST";
       } else spot = spotShort = "ON THE SPOT";
