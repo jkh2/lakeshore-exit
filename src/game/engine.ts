@@ -977,9 +977,9 @@ export function mountGame(
       // Drifting in over the lake on the breeze, toward the beach and the city.
       balloonStart.set(DZ_X + 520, hopAlt, DZ_Z - 160);
       riderX = -0.3;
-      riderZ = 0;
-      // Facing downtown, with the other balloons out ahead.
-      localYaw = 0.72;
+      riderZ = 0.2;
+      // Facing downtown between the frame poles, with another balloon out ahead.
+      localYaw = 1.15;
       localPitch = -0.2;
     }
     moveRides(0);
