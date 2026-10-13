@@ -8,7 +8,8 @@ import type { JumpScore, Outcome, ScoreItem } from "./types";
 // A wingsuit swaps them for the flight: how well the suit glided, how far it went from the
 // plane, and off a building how close you dared to pass the towers. Off a helicopter or a
 // balloon there is no formation and no wind to fly on at first: the dock and separation give
-// way to how fast you got stable in the dead air, and how long a delay you took.
+// way to how fast you got stable in the dead air, and how long a delay you took. On a ring
+// course all of that middle is the rings: a share of 35 for each one you flew through.
 
 /** Pull at or above this for full marks: the altimeter's critical altitude minus a little track. */
 const ON_TIME_FT = 4000;
@@ -17,6 +18,8 @@ const CLEAR_M = 25;
 /** BASE: open at or above this for a clean pull, and above the second for a low one. */
 const BASE_CLEAN_FT = 500;
 const BASE_LOW_FT = 300;
+/** Ring challenge: the points the whole course is worth. */
+const RINGS_MAX = 35;
 /** Wingsuit: points for each close pass by a building, up to the cap. */
 const PASS_PTS = 5;
 const PASS_CAP = 10;
@@ -42,6 +45,7 @@ export type JumpFacts = Pick<
   | "glide"
   | "passes"
   | "closestM"
+  | "rings"
 > & {
   /** Feet at the first dock, or null if the player never docked. */
   dockedFt: number | null;
@@ -110,7 +114,18 @@ export function scoreJump(f: JumpFacts): JumpScore {
         f.redLight ? "Left on the red light" : "On the green light",
       );
 
-    if (winged) {
+    if (f.rings) {
+      const { got, total } = f.rings;
+      const what = winged ? "gates" : "rings";
+      add(
+        "Rings",
+        total > 0 ? Math.round((RINGS_MAX * got) / total) : 0,
+        RINGS_MAX,
+        total === 0
+          ? `Pulled before the ${what}`
+          : `${got} of ${total} ${what}${got === total ? " · clean sweep" : ""}`,
+      );
+    } else if (winged) {
       add("Glide", glidePts(f.glide, 20, 2.5, 0.35), 20, glideNote);
       const m = f.flightM ?? 0;
       const range = m >= 4000 ? 15 : m >= 3000 ? 12 : m >= 2000 ? 9 : m >= 1000 ? 5 : m > 0 ? 2 : 0;

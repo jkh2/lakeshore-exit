@@ -200,6 +200,42 @@ export function createAudio() {
         /* ignore */
       }
     },
+    /** Through a ring: a bright chime that climbs a pentatonic scale with each ring in a row. */
+    ring(streak: number) {
+      try {
+        if (!ctx || !master || muted) return;
+        const steps = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24];
+        const step = steps[Math.min(steps.length - 1, Math.max(0, streak - 1))] ?? 0;
+        const f = 523.25 * 2 ** (step / 12);
+        beep(f, 0, 0.6, 0.075, "sine");
+        beep(f * 2.01, 0, 0.32, 0.028, "sine");
+        beep(f * 1.5, 0.06, 0.42, 0.03, "triangle");
+      } catch {
+        /* ignore */
+      }
+    },
+    /** Past a ring without going through: two soft low notes. */
+    ringMiss() {
+      try {
+        if (!ctx || !master || muted) return;
+        beep(196, 0, 0.3, 0.06, "triangle");
+        beep(147, 0.12, 0.38, 0.06, "triangle");
+      } catch {
+        /* ignore */
+      }
+    },
+    /** Every ring on the course: a rising arpeggio. */
+    sweep() {
+      try {
+        if (!ctx || !master || muted) return;
+        [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => {
+          beep(f, 0.18 + i * 0.11, 0.5, 0.05, "sine");
+          beep(f * 2, 0.18 + i * 0.11, 0.25, 0.015, "sine");
+        });
+      } catch {
+        /* ignore */
+      }
+    },
     /** Air tearing past a wall close by: a noise burst that sweeps up and fades. */
     whoosh(strength = 1) {
       try {

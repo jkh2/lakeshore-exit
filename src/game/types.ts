@@ -49,6 +49,8 @@ export type Outcome = {
   /** Wingsuit: close passes by a building, and the closest one in meters. */
   passes: number;
   closestM: number | null;
+  /** Ring challenge: rings flown through out of the course, or null when rings were off. */
+  rings: { got: number; total: number } | null;
   area: Area;
   /** The roof you came down on: a marked pad's name, or a plain description. */
   roof: string | null;
@@ -84,6 +86,8 @@ export type Save = {
   ride: Ride;
   roof: PadId;
   suit: Suit;
+  /** Fly the ring challenge instead of the formation (or open sky). */
+  rings: boolean;
 };
 
 export type Bridge = {
@@ -95,6 +99,7 @@ export type Bridge = {
   ride: Ride;
   roof: PadId;
   suit: Suit;
+  rings: boolean;
   muted: boolean;
   /** Start from the menu, back to the menu, the same jump again, or BASE off the roof you landed on. */
   command: "start" | "again" | "retry" | "base" | null;
@@ -152,6 +157,7 @@ export function createBridge(): Bridge {
     ride: "plane",
     roof: "southloop",
     suit: "rig",
+    rings: false,
     muted: false,
     command: null,
     moveX: 0,

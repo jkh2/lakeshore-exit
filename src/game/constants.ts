@@ -13,6 +13,11 @@ export const DEFAULT_EXIT_FT = 12500;
 export const HOP_MIN_FT = 5000;
 export const HOP_MAX_FT = 14000;
 export const DEFAULT_HOP_FT = 7500;
+/** Rings off a helicopter or a balloon need this much sky for a course after the dead air. */
+export const RINGS_HOP_MIN_FT = 8000;
+/** The lowest flat ring, and the lowest wingsuit gate: a ring course always ends above the pull. */
+export const RING_FLOOR_FT = 5000;
+export const GATE_FLOOR_FT = 5500;
 export const DEFAULT_MAL_PCT = 15;
 
 export const DZ_X = 70;
