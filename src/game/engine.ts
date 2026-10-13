@@ -1722,7 +1722,7 @@ export function mountGame(
       return `THE EDGE · ${Math.round(ahead.drop * FT_PER_M).toLocaleString("en-US")} FT DOWN · STEP OFF`;
     }
     if (ahead.kind === "ledge") return "A LOWER ROOF IS RIGHT BELOW — JUMP ANOTHER WAY";
-    return "WALK TO THE EDGE · SPACE RUNS AND JUMPS";
+    return coarse ? "WALK TO THE EDGE · JUMP RUNS YOU OFF" : "WALK TO THE EDGE · SPACE RUNS AND JUMPS";
   }
 
   function southboundLight(dir: THREE.Vector3) {
@@ -1792,7 +1792,7 @@ export function mountGame(
     } else if (phase === "roof") {
       prompt = roofPrompt();
     } else if (phase === "freefall") {
-      if (mode === "base") prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · SPACE PULLS`;
+      if (mode === "base") prompt = `DELAY ${(simTime - exitTime).toFixed(1)} s · ${coarse ? "TAP PULL" : "SPACE PULLS"}`;
       else if (reserveArmed) prompt = "PULL RESERVE — R OR SPACE";
       else if (docked) prompt = "DOCKED · HOLD ON UNTIL BREAK-OFF";
       else if (formation.active()) {
@@ -1806,7 +1806,7 @@ export function mountGame(
         else prompt = "FACE IN TO DOCK";
       } else if (brokeOff && formation.nearest(pos) < 30) {
         prompt = "TRACK AWAY — HOLD S, THEN PULL";
-      } else prompt = "SPACE PULLS";
+      } else prompt = coarse ? "TAP PULL" : "SPACE PULLS";
     } else if (phase === "malfunction") {
       prompt = "X CUT AWAY · THEN R RESERVE";
     } else if (phase === "deploying") {
