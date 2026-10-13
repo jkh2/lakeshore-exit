@@ -13,6 +13,7 @@ export function defaultSave(): Save {
     light: "day",
     ride: "plane",
     roof: "southloop",
+    suit: "rig",
   };
 }
 
@@ -35,6 +36,7 @@ export function loadSave(): Save {
       light: isLight(parsed.light) ? parsed.light : base.light,
       ride: parsed.ride === "roof" ? "roof" : "plane",
       roof: isPadId(parsed.roof) ? parsed.roof : base.roof,
+      suit: parsed.suit === "wing" ? "wing" : "rig",
     };
   } catch {
     return defaultSave();

@@ -147,6 +147,35 @@ export function createAudio() {
         /* ignore */
       }
     },
+    /** Air tearing past a wall close by: a noise burst that sweeps up and fades. */
+    whoosh(strength = 1) {
+      try {
+        if (!ctx || !master || muted) return;
+        const dur = 0.7;
+        const t = ctx.currentTime;
+        const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+        const ch = buffer.getChannelData(0);
+        for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        const f = ctx.createBiquadFilter();
+        f.type = "bandpass";
+        f.Q.value = 1.4;
+        f.frequency.setValueAtTime(380, t);
+        f.frequency.exponentialRampToValueAtTime(1700, t + dur * 0.45);
+        f.frequency.exponentialRampToValueAtTime(520, t + dur);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.32 * strength, t + dur * 0.4);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        src.connect(f);
+        f.connect(g);
+        g.connect(master);
+        src.start();
+      } catch {
+        /* ignore */
+      }
+    },
     alarm() {
       try {
         ensure();

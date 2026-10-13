@@ -6,6 +6,8 @@ export type Ride = "plane" | "roof";
 export type PadId = "southloop" | "aqua" | "aon" | "willis";
 /** A skydive from the plane, or a BASE jump off a roof. */
 export type JumpMode = "skydive" | "base";
+/** What you jump in: the standard rig, or a wingsuit that glides before the pull. */
+export type Suit = "rig" | "wing";
 /** Where a jump came down. */
 export type Area = "beach" | "park" | "street" | "roof" | "water" | "none";
 
@@ -35,6 +37,14 @@ export type JumpScore = {
 export type Outcome = {
   kind: "landed" | "water" | "impact";
   mode: JumpMode;
+  suit: Suit;
+  /** Wingsuit: meters flown over the ground from the exit to the pull. */
+  flightM: number | null;
+  /** Wingsuit: distance over height lost once the suit was flying, up to the pull. */
+  glide: number | null;
+  /** Wingsuit: close passes by a building, and the closest one in meters. */
+  passes: number;
+  closestM: number | null;
   area: Area;
   /** The roof you came down on: a marked pad's name, or a plain description. */
   roof: string | null;
@@ -67,6 +77,7 @@ export type Save = {
   light: Light;
   ride: Ride;
   roof: PadId;
+  suit: Suit;
 };
 
 export type Bridge = {
@@ -76,6 +87,7 @@ export type Bridge = {
   malChance: number;
   ride: Ride;
   roof: PadId;
+  suit: Suit;
   muted: boolean;
   /** Start from the menu, back to the menu, the same jump again, or BASE off the roof you landed on. */
   command: "start" | "again" | "retry" | "base" | null;
@@ -93,6 +105,7 @@ export type Bridge = {
 export type Hud = {
   phase: Phase;
   mode: JumpMode;
+  suit: Suit;
   altitudeFt: number;
   fallMph: number;
   groundMph: number;
@@ -130,6 +143,7 @@ export function createBridge(): Bridge {
     malChance: 0.15,
     ride: "plane",
     roof: "southloop",
+    suit: "rig",
     muted: false,
     command: null,
     moveX: 0,

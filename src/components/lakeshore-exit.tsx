@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clsx } from "clsx";
-import { AlertTriangle, Building2, Plane, RotateCcw, Star, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Bird, Building2, Plane, RotateCcw, Star, Volume2, VolumeX } from "lucide-react";
 import { cardinal, describeOutcome } from "@/game/grade";
 import { loadSave, writeSave } from "@/game/save";
 import {
@@ -27,6 +27,7 @@ import {
   type PadId,
   type Phase,
   type Ride,
+  type Suit,
 } from "@/game/types";
 
 const LIGHT_LABEL: Record<Light, string> = { day: "Midday", golden: "Golden hour", dusk: "Dusk" };
@@ -73,6 +74,7 @@ export function LakeshoreExit() {
   const [mode, setMode] = useState<JumpMode>("skydive");
   const [ride, setRide] = useState<Ride>("plane");
   const [roof, setRoof] = useState<PadId>("southloop");
+  const [suit, setSuit] = useState<Suit>("rig");
   const [banner, setBanner] = useState("");
   const [bannerLevel, setBannerLevel] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -180,10 +182,12 @@ export function LakeshoreExit() {
     bridgeRef.current.malChance = mal / 100;
     bridgeRef.current.ride = saved.ride;
     bridgeRef.current.roof = saved.roof;
+    bridgeRef.current.suit = saved.suit;
     setAltitudeFt(alt);
     setMalPct(mal);
     setRide(saved.ride);
     setRoof(saved.roof);
+    setSuit(saved.suit);
     setRecord({ bestM: saved.bestM, bestScore: saved.bestScore, jumps: saved.jumps, rides: saved.rides });
     setLight(saved.light);
   }, []);
@@ -234,6 +238,12 @@ export function LakeshoreExit() {
     writeSave({ ...loadSave(), ride: r, roof: pad });
   };
   const fromRoof = ride === "roof";
+  const chooseSuit = (next: Suit) => {
+    bridge.suit = next;
+    setSuit(next);
+    writeSave({ ...loadSave(), suit: next });
+  };
+  const winged = suit === "wing";
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-ink text-fg">
@@ -366,9 +376,11 @@ export function LakeshoreExit() {
               : phase === "roof"
                 ? "WASD walk · shift runs · step off an edge, or space to run and jump"
                 : phase === "freefall"
-                ? base
-                  ? "A/D turn · W arch · S dive · space pulls · count your delay"
-                  : "A/D turn · W arch · S dive · space pulls"
+                ? winged
+                  ? "A/D bank · W dive · S flare · mouse looks · space pulls"
+                  : base
+                    ? "A/D turn · W arch · S dive · space pulls · count your delay"
+                    : "A/D turn · W arch · S dive · space pulls"
                 : phase === "malfunction"
                   ? "X cut away · R reserve"
                   : phase === "canopy"
@@ -438,20 +450,32 @@ export function LakeshoreExit() {
         <aside className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 max-h-[86dvh] overflow-y-auto p-3 md:inset-y-0 md:left-0 md:w-[26rem] md:max-h-none md:p-6">
           <div className="rounded-2xl border border-line bg-panel/90 p-5 backdrop-blur-md">
             <div className="flex items-center gap-2 text-amber">
-              {fromRoof ? (
+              {winged ? (
+                <Bird className="size-5" aria-hidden="true" />
+              ) : fromRoof ? (
                 <Building2 className="size-5" aria-hidden="true" />
               ) : (
                 <Plane className="size-5" aria-hidden="true" />
               )}
               <p className="font-display text-sm tracking-[0.22em]">
-                {fromRoof ? "ROOFTOP BASE · CHICAGO" : "TWIN OTTER · CHICAGO"}
+                {winged
+                  ? fromRoof
+                    ? "WINGSUIT BASE · CHICAGO"
+                    : "WINGSUIT · TWIN OTTER"
+                  : fromRoof
+                    ? "ROOFTOP BASE · CHICAGO"
+                    : "TWIN OTTER · CHICAGO"}
               </p>
             </div>
             <h1 className="mt-2 font-display text-5xl leading-none font-semibold tracking-wide">Lakeshore Exit</h1>
             <p className="mt-3 text-sm leading-relaxed text-muted">
-              {fromRoof
-                ? "Stand on top of a Chicago tower, walk to the edge and jump. You get seconds, not minutes, before the pull."
-                : "Look around the cabin, walk to the door, and leave over Lake Michigan. The beach is west. The breeze is off the lake."}
+              {winged
+                ? fromRoof
+                  ? "Fly a wingsuit off a Chicago tower. The suit fills in a couple of seconds, then you get a short flight past the skyline before the pull. Willis Tower gives the longest."
+                  : "Leave the Twin Otter in a wingsuit and fly the lakefront. The suit goes two and a half feet forward for every foot down, so go see the city."
+                : fromRoof
+                  ? "Stand on top of a Chicago tower, walk to the edge and jump. You get seconds, not minutes, before the pull."
+                  : "Look around the cabin, walk to the door, and leave over Lake Michigan. The beach is west. The breeze is off the lake."}
             </p>
 
             <div className="mt-4" role="radiogroup" aria-labelledby="ride-label">
@@ -477,6 +501,30 @@ export function LakeshoreExit() {
                       <Building2 className="size-4" aria-hidden="true" />
                     )}
                     {r === "plane" ? "The plane" : "A rooftop"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-3" role="radiogroup" aria-labelledby="suit-label">
+              <span id="suit-label" className="block font-display text-lg tracking-wide">
+                Suit
+              </span>
+              <div className="mt-1.5 grid grid-cols-2 gap-2">
+                {(["rig", "wing"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    role="radio"
+                    aria-checked={suit === v}
+                    className={clsx(
+                      "flex h-10 items-center justify-center gap-2 rounded-md border font-display text-base tracking-wide",
+                      suit === v ? "border-amber bg-amber text-ink" : "border-line bg-ink/60 text-fg",
+                    )}
+                    onClick={() => chooseSuit(v)}
+                  >
+                    {v === "wing" ? <Bird className="size-4" aria-hidden="true" /> : null}
+                    {v === "wing" ? "Wingsuit" : "Standard"}
                   </button>
                 ))}
               </div>
@@ -621,13 +669,27 @@ export function LakeshoreExit() {
               {fromRoof ? (
                 <>
                   <li>Roof: WASD walks, shift runs. Step off an edge, or press space to run and jump.</li>
-                  <li>Freefall: you start from a standstill, so speed builds slowly. Space pulls.</li>
+                  {winged ? (
+                    <li>
+                      Wingsuit: let the suit fill, then fly. A and D bank, W dives, S flares. Fly close past the towers
+                      for points. Space pulls.
+                    </li>
+                  ) : (
+                    <li>Freefall: you start from a standstill, so speed builds slowly. Space pulls.</li>
+                  )}
                   <li>Canopy: it opens in about a second. Fly the arrow to open ground and land facing the lake.</li>
                 </>
               ) : (
                 <>
                   <li>Cabin: look around and walk to the door. On the green light the bar lifts: run out.</li>
-                  <li>Freefall: A and D turn, W arches, S dives, space pulls.</li>
+                  {winged ? (
+                    <li>
+                      Wingsuit: the suit fills in about two seconds. A and D bank, W dives for speed, S flares to slow
+                      down. The mouse looks around. Space pulls.
+                    </li>
+                  ) : (
+                    <li>Freefall: A and D turn, W arches, S dives, space pulls.</li>
+                  )}
                   <li>Canopy: A and D turn, S flares. Land facing the lake, into the wind. The marked rooftops count too.</li>
                 </>
               )}
