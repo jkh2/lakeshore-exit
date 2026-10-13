@@ -767,6 +767,9 @@ const LAKEFRONT: readonly Rect[] = [
   { x0: 0, x1: SHORE_X - 14, z0: -3860, z1: -3400 },
 ];
 
+/** Parks and lawns inside the city rectangle: no streets or traffic run across them. */
+export const OPEN_GROUND: readonly Rect[] = [GRANT_PARK, CAMPUS, ...LAKEFRONT];
+
 export type Skyline = { update: (dt: number) => void };
 
 export function createSkyline(
