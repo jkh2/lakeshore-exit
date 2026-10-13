@@ -31,6 +31,21 @@ export const CANOPY_EYE_Y = 0.62;
 /** The open wing's planform and its middle in canopy-group space, for its shadow. */
 export const WING = { span: SPAN, chord: CHORD, y: HEIGHT - ARC * 0.5, z: FORWARD } as const;
 
+/** Seconds a canopy takes, once its jumper is down, to surge on past them and settle on the ground. */
+export const COLLAPSE_S = 1.6;
+
+/**
+ * Lays a landed canopy down: `fold` 0 as the feet touch, 1 lying flat on the ground ahead,
+ * deflated. Call after placing the group over its jumper (it sets the group's scale, so call it
+ * with 0 while flying too); fold the inflation down to about 0.2 alongside.
+ */
+export function settleCanopy(group: THREE.Object3D, fold: number) {
+  group.scale.set(1, 1 - fold * 0.93, 1);
+  if (fold <= 0) return;
+  group.translateZ(-fold * 3.4);
+  group.position.y -= fold * 0.9;
+}
+
 /** Where a brake toggle sits for a given brake input, in canopy-group space. */
 export function togglePosition(out: THREE.Vector3, side: -1 | 1, brake: number) {
   return out.set(side * (RISER_X + 0.02 + brake * 0.04), RISER_TOP_Y - 0.22 - brake * 1.0, RISER_FRONT + 0.03 - brake * 0.28);

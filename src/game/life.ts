@@ -1,11 +1,19 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { DZ_X, DZ_Z, SHORE_X } from "./constants";
+import {
+  airliner as airlinerGeo,
+  airlinerLights,
+  contrail,
+  lightPlane,
+  propDisk,
+} from "./aircraft";
 import { CITY, OPEN_GROUND } from "./skyline";
 import { rng } from "./world";
 
 // The city going about its evening: traffic on Lake Shore Drive and the streets, boats on the
-// lake, airliners crossing high over the water, and people on the beach and the lakefront trail.
+// lake, airliners crossing over the water with contrails high above, light planes along the
+// shore, and people on the beach and the lakefront trail.
 // Everything moves on the GPU: each instance has a start point and heading in its matrix and
 // a speed, path length and phase in `aMove`, and the vertex shader slides it along its path
 // from the clock, so thousands of cars cost no work per frame on the CPU.
@@ -26,6 +34,9 @@ type Mover = {
   color?: THREE.Color;
 };
 
+/** People and umbrellas this close to the camera step out of the way: they aren't drawn. */
+const PERSONAL_M = 2.4;
+
 const MOVE_SHADER = /* glsl */ `
   uniform float uTime;
   attribute vec4 aMove;
@@ -43,8 +54,17 @@ const MOVE_SHADER = /* glsl */ `
     return vec3(d, 1.0, smoothstep(0.0, 40.0, d) * smoothstep(aMove.y, aMove.y - 40.0, d));
   }`;
 
-/** Patches a material so each instance slides along its local -z by its `aMove` path. */
-function moving<M extends THREE.Material>(mat: M, time: THREE.IUniform<number>, key: string): M {
+/**
+ * Patches a material so each instance slides along its local -z by its `aMove` path. With
+ * `nearM`, an instance closer than that to the camera isn't drawn, so a replay camera set down
+ * on the beach isn't left staring into someone's shirt.
+ */
+function moving<M extends THREE.Material>(
+  mat: M,
+  time: THREE.IUniform<number>,
+  key: string,
+  nearM = 0,
+): M {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = time;
     shader.vertexShader = shader.vertexShader
@@ -61,6 +81,20 @@ function moving<M extends THREE.Material>(mat: M, time: THREE.IUniform<number>, 
          transformed.xz *= mv.y;
          transformed.z -= mv.x;`,
       );
+    if (nearM > 0) {
+      const near = "#include <common>\nvarying float vNear;";
+      shader.vertexShader = shader.vertexShader.replace("#include <common>", near).replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
+         vNear = distance((modelMatrix * instanceMatrix * vec4(0.0, 0.0, -mv.x, 1.0)).xyz, cameraPosition);`,
+      );
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", near)
+        .replace(
+          "#include <clipping_planes_fragment>",
+          `#include <clipping_planes_fragment>\nif (vNear < ${nearM.toFixed(2)}) discard;`,
+        );
+    }
   };
   mat.customProgramCacheKey = () => `mover-${key}`;
   return mat;
@@ -207,6 +241,8 @@ export function createLife(
   opts: {
     coarse: boolean;
     night: boolean;
+    /** The sunlight's color, which tints the contrails. */
+    sunColor: string;
     onTop: (m: THREE.Material, k: number) => THREE.Material;
   },
 ): Life {
@@ -217,11 +253,12 @@ export function createLife(
   scene.add(root);
   const r = rng(91);
 
-  const solid = (key: string, side: THREE.Side = THREE.FrontSide) =>
+  const solid = (key: string, side: THREE.Side = THREE.FrontSide, nearM = 0) =>
     moving(
       new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.2, side }),
       time,
       key,
+      nearM,
     );
   // Cars sit a hair over the road, which is itself pulled forward in depth; keep them on top of it.
   const carMat = onTop(solid("car"), 4);
@@ -547,17 +584,29 @@ export function createLife(
     { geo: wake(70, 3.4, 15), mat: foamMat },
   ]);
 
-  // ---- Airliners over the lakefront ----
-  const jet = merge([
-    box(3.6, 3.6, 38, 0, 0, 0, [0.96, 0.97, 0.98]),
-    box(34, 0.5, 6, 0, -0.6, 1, [0.82, 0.84, 0.86]),
-    box(12, 0.35, 3.2, 0, 0.6, 17, [0.82, 0.84, 0.86]),
-    box(0.4, 6.5, 4, 0, 4, 17.5, [0.2, 0.3, 0.6]),
-    box(2.2, 2.2, 4.4, -6.5, -2, -1, [0.7, 0.72, 0.75]),
-    box(2.2, 2.2, 4.4, 6.5, -2, -1, [0.7, 0.72, 0.75]),
-  ]);
-  // Arrivals come in low off the lake toward O'Hare and Midway; departures climb out east.
-  // Paths are 60 km long, staggered so one is usually somewhere over the lakefront.
+  // ---- Aircraft ----
+  const jetMat = moving(
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.3 }),
+    time,
+    "jet",
+  );
+  const liveryMat = moving(
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.4, metalness: 0.2 }),
+    time,
+    "livery",
+  );
+  const navMat = moving(
+    new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }),
+    time,
+    "nav",
+  );
+  const airliner = airlinerGeo();
+  const LIVERY = ["#1d3f8f", "#c8202f", "#0f6e8c", "#e2a400", "#5b2a86", "#1f7a44", "#20242b"].map(
+    hex,
+  );
+  // Arrivals come in low off the lake toward O'Hare and Midway; departures climb out east; a
+  // few run north and south along the shore. Paths are 60 km long, staggered so one is usually
+  // somewhere over the lakefront.
   const jets: Mover[] = [
     { x: 30000, y: 1250, z: -2600, yaw: Math.PI / 2, speed: 95, span: 60000, phase: 0 },
     {
@@ -572,35 +621,95 @@ export function createLife(
     { x: 30000, y: 1700, z: -9000, yaw: Math.PI / 2 + 0.03, speed: 110, span: 60000, phase: 40000 },
     { x: -30000, y: 3200, z: 12000, yaw: -Math.PI / 2, speed: 160, span: 60000, phase: 8000 },
     { x: 30000, y: 1500, z: 2500, yaw: Math.PI / 2 - 0.02, speed: 100, span: 60000, phase: 52000 },
+    { x: 6000, y: 2600, z: -30000, yaw: Math.PI, speed: 140, span: 60000, phase: 30000 },
+    { x: 3500, y: 3900, z: 30000, yaw: 0.04, speed: 150, span: 60000, phase: 14000 },
+    { x: -30000, y: 950, z: -6000, yaw: -Math.PI / 2 + 0.04, speed: 88, span: 60000, phase: 46000 },
   ];
-  fleet(root, jets, [
+  // High overhead, cruising between the coasts with contrails behind.
+  const cruisers: Mover[] = [
+    { x: 70000, y: 10600, z: -26000, yaw: Math.PI / 2 + 0.38, speed: 235, span: 150000, phase: 0 },
     {
-      geo: jet,
+      x: -70000,
+      y: 11200,
+      z: 9000,
+      yaw: -Math.PI / 2 + 0.22,
+      speed: 250,
+      span: 150000,
+      phase: 62000,
+    },
+    { x: 26000, y: 10900, z: 70000, yaw: -0.36, speed: 240, span: 150000, phase: 104000 },
+  ];
+  for (const j of [...jets, ...cruisers]) j.color = pick(r, LIVERY);
+  for (const list of [jets, cruisers]) {
+    fleet(root, list, [
+      { geo: airliner.body, mat: jetMat },
+      { geo: airliner.colors, mat: liveryMat, tint: true },
+      ...(night ? [{ geo: airlinerLights(), mat: navMat }] : []),
+    ]);
+  }
+  const trailTint = new THREE.Color(opts.sunColor).lerp(new THREE.Color(1, 1, 1), 0.55);
+  if (night) trailTint.multiplyScalar(0.62);
+  fleet(root, cruisers, [
+    {
+      geo: contrail(2600),
       mat: moving(
-        new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.3 }),
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          color: trailTint,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          fog: false,
+        }),
         time,
-        "jet",
+        "contrail",
       ),
     },
   ]);
-  if (night) {
-    const nav = merge([
-      box(0.9, 0.9, 0.9, -17, -0.6, 1, [1, 0.1, 0.08]),
-      box(0.9, 0.9, 0.9, 17, -0.6, 1, [0.1, 1, 0.3]),
-      box(0.8, 0.8, 0.8, 0, 7.4, 19, [1, 1, 1]),
-      box(0.7, 0.4, 0.7, 0, -1.9, 0, [1, 0.15, 0.1]),
-    ]);
-    fleet(root, jets, [
-      {
-        geo: nav,
-        mat: moving(
-          new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }),
-          time,
-          "nav",
-        ),
-      },
-    ]);
-  }
+  // Light planes up and down the lakefront corridor, a thousand-odd feet over the water.
+  const small = lightPlane();
+  const flyers: Mover[] = [
+    { x: 900, y: 330, z: 4000, yaw: 0, speed: 52, span: 16000, phase: 0, pingpong: true },
+    {
+      x: 1500,
+      y: 450,
+      z: -12000,
+      yaw: Math.PI,
+      speed: 48,
+      span: 16000,
+      phase: 9000,
+      pingpong: true,
+    },
+    { x: 2200, y: 380, z: 4000, yaw: 0, speed: 55, span: 16000, phase: 21000, pingpong: true },
+    {
+      x: 1200,
+      y: 520,
+      z: -12000,
+      yaw: Math.PI,
+      speed: 50,
+      span: 16000,
+      phase: 27000,
+      pingpong: true,
+    },
+  ];
+  for (const l of flyers) l.color = pick(r, LIVERY);
+  fleet(root, flyers, [
+    { geo: small.body, mat: jetMat },
+    { geo: small.colors, mat: liveryMat, tint: true },
+    {
+      geo: propDisk(),
+      mat: moving(
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+        time,
+        "prop",
+      ),
+    },
+  ]);
 
   // ---- People ----
   const skinPart = merge([
@@ -750,8 +859,8 @@ export function createLife(
   for (const p of standing) p.color = pick(r, SHIRTS);
   for (const p of lying) p.color = pick(r, BRIGHT);
   const skinTone = (list: Mover[]) => list.map((p) => ({ ...p, color: pick(r, SKIN) }));
-  const flesh = solid("flesh");
-  const cloth = solid("cloth");
+  const flesh = solid("flesh", THREE.FrontSide, PERSONAL_M);
+  const cloth = solid("cloth", THREE.FrontSide, PERSONAL_M);
   fleet(root, skinTone(standing), [{ geo: skinPart, mat: flesh, tint: true }]);
   fleet(root, standing, [{ geo: clothesPart, mat: cloth, tint: true }]);
   fleet(root, skinTone(lying), [{ geo: lie(skinPart), mat: flesh, tint: true }]);
@@ -759,7 +868,9 @@ export function createLife(
     { geo: lie(clothesPart), mat: cloth },
     { geo: towel, mat: cloth, tint: true },
   ]);
-  fleet(root, umbrellas, [{ geo: umbrella, mat: solid("umbrella", THREE.DoubleSide), tint: true }]);
+  fleet(root, umbrellas, [
+    { geo: umbrella, mat: solid("umbrella", THREE.DoubleSide, PERSONAL_M), tint: true },
+  ]);
 
   return {
     update(t) {

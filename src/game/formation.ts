@@ -1,8 +1,16 @@
 import * as THREE from "three";
 import { createBody, EYE_UP, type Body, type BodyLook, type BodyPose } from "./body";
-import { CANOPY_EYE_Y, createCanopy, togglePosition, type Canopy } from "./canopy";
+import {
+  CANOPY_EYE_Y,
+  COLLAPSE_S,
+  createCanopy,
+  settleCanopy,
+  togglePosition,
+  type Canopy,
+} from "./canopy";
 import { DZ_X, DZ_Z, FT_PER_M, WIND_X, WIND_Z } from "./constants";
 import type { ShadowCaster } from "./shadow";
+import { CREW, CREW_AT, GESTURES, JUMPER, JUMPER_AT } from "./tape";
 
 // Two other jumpers leave the plane with the player, build a two-way base and leave a
 // slot open for the player to dock on. At break-off they turn, track away, open their
@@ -18,6 +26,7 @@ const FREEFALL_EYE = 0.32;
 const OPEN_DUR = 2.65;
 
 type State = "freefall" | "track" | "deploying" | "canopy" | "down";
+const STATES: readonly State[] = ["freefall", "track", "deploying", "canopy", "down"];
 
 /** Suits and helmets for the two other jumpers; the cabin seats them in the same colors. */
 export const LOOKS: BodyLook[] = [
@@ -89,6 +98,10 @@ export type Formation = {
   nearest: (p: THREE.Vector3) => number;
   /** Adds each jumper in the sky or on the ground, for their shadows. */
   casters: (out: ShadowCaster[]) => void;
+  /** Writes where everyone is into a replay frame. */
+  record: (f: Float32Array) => void;
+  /** Puts everyone where a replay frame has them, ready to draw. */
+  play: (f: Float32Array) => void;
   reset: () => void;
   dispose: () => void;
 };
@@ -433,20 +446,18 @@ export function createFormation(scene: THREE.Scene): Formation {
         j.body.update(j.frame, p, dt);
 
         const showWing =
-          j.state === "canopy" ||
-          (j.state === "deploying" && j.openT > 0.35) ||
-          (j.state === "down" && j.stateT < 1.4);
+          j.state === "canopy" || (j.state === "deploying" && j.openT > 0.35) || j.state === "down";
         j.wing.group.visible = showWing;
         if (showWing) {
+          const fold = j.state === "down" ? smooth(Math.min(1, j.stateT / COLLAPSE_S)) : 0;
           const u =
             j.state === "deploying"
               ? smooth(THREE.MathUtils.clamp((j.openT - 0.3) / (OPEN_DUR * 0.8), 0.02, 1))
-              : j.state === "down"
-                ? 1 - smooth(j.stateT / 1.4) * 0.8
-                : 1;
+              : 1 - fold * 0.8;
           j.wing.group.position.copy(j.pos);
           j.wing.group.position.y += EYE_UP - CANOPY_EYE_Y;
           j.wing.group.rotation.set(0, j.yaw, j.state === "canopy" ? j.bank * 0.45 : 0);
+          settleCanopy(j.wing.group, fold);
           j.wing.update(u, j.brake, j.brake);
         }
       }
@@ -480,6 +491,55 @@ export function createFormation(scene: THREE.Scene): Formation {
       for (const j of jumpers) {
         if (j.body.group.visible) out.push({ feet: j.pos, wing: j.wing.group });
       }
+    },
+    record(f) {
+      const c = CREW.at;
+      f[CREW_AT + c.started] = started ? 1 : 0;
+      f[CREW_AT + c.broken] = broken ? 1 : 0;
+      f.set([center.x, center.y, center.z], CREW_AT + c.center);
+      f[CREW_AT + c.angle] = playerAngle;
+      f[CREW_AT + c.docked] = playerDocked ? 1 : 0;
+      jumpers.forEach((j, i) => {
+        const at = JUMPER_AT + i * JUMPER.size;
+        const k = JUMPER.at;
+        f.set([j.pos.x, j.pos.y, j.pos.z], at + k.pos);
+        f[at + k.yaw] = j.yaw;
+        f[at + k.bank] = j.bank;
+        f[at + k.brake] = j.brake;
+        f[at + k.state] = STATES.indexOf(j.state);
+        f[at + k.openT] = j.openT;
+        f[at + k.stateT] = j.stateT;
+        f[at + k.linked] = j.linked ? 1 : 0;
+        f[at + k.gesture] = GESTURES.indexOf(j.pose.gesture);
+        f[at + k.gestureT] = j.pose.gestureT;
+      });
+    },
+    play(f) {
+      const c = CREW.at;
+      started = f[CREW_AT + c.started] === 1;
+      broken = f[CREW_AT + c.broken] === 1;
+      center.fromArray(f, CREW_AT + c.center);
+      playerAngle = f[CREW_AT + c.angle]!;
+      playerDocked = f[CREW_AT + c.docked] === 1;
+      jumpers.forEach((j, i) => {
+        const at = JUMPER_AT + i * JUMPER.size;
+        const k = JUMPER.at;
+        j.pos.fromArray(f, at + k.pos);
+        j.yaw = f[at + k.yaw]!;
+        j.bank = f[at + k.bank]!;
+        j.brake = f[at + k.brake]!;
+        j.state = STATES[f[at + k.state]!] ?? "freefall";
+        j.openT = f[at + k.openT]!;
+        j.stateT = f[at + k.stateT]!;
+        j.linked = f[at + k.linked] === 1;
+        j.pose.gesture = GESTURES[f[at + k.gesture]!] ?? null;
+        j.pose.gestureT = f[at + k.gestureT]!;
+        if (!started) {
+          j.body.group.visible = false;
+          j.wing.group.visible = false;
+          j.pose.mode = "hidden";
+        }
+      });
     },
     reset() {
       started = false;
