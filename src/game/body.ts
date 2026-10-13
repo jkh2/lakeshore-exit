@@ -47,7 +47,7 @@ const FORE = 0.29;
 const THIGH = 0.43;
 const SHIN = 0.42;
 
-const PLAYER_LOOK: BodyLook = { suit: "#2c5a8c", suitDark: "#1d3d61", helmet: "#e9ecef" };
+export const PLAYER_LOOK: BodyLook = { suit: "#2c5a8c", suitDark: "#1d3d61", helmet: "#e9ecef" };
 const GLOVE = "#17191c";
 const SHOE = "#2a2c30";
 const HARNESS = "#121417";
@@ -244,6 +244,8 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
       return m;
     })(),
     footPos: new THREE.Vector3(side * 0.12, -1.55, 0),
+    kneeAt: new THREE.Vector3(),
+    ankleAt: new THREE.Vector3(),
   }));
   const torso = limb(suit, 0.17, 0.11, trunk);
   const hips = joint(suitDark, 0.17);
@@ -289,8 +291,8 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
   }
   for (const m of [helmet, visor, neck, container, tray]) m.visible = third;
 
-  // First person only: the wingsuit's arm wings. The arms are inside the wing, so they take
-  // its color, and the fabric runs from the arm back to the hip. Each wing is a grid: across
+  // The wingsuit's arm wings. The arms are inside the wing, so they take its color, and the
+  // fabric runs from the arm back to the hip. Each wing is a grid: across
   // the span armpit, elbow and wrist; along the chord stations from the arm to the trailing
   // edge, so the fabric can bulge where the air fills it and carry a dark stripe at the back.
   const WING_ORANGE = "#f06a1e";
@@ -326,6 +328,24 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
     geos.push(g);
     return m;
   });
+
+  // Seen from outside, a wingsuit also has a tail wing between the legs: crotch, knee, ankle,
+  // ankle, knee, with the dark stripe along the trailing edge at the feet.
+  const tail = (() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(15), 3));
+    const orange = new THREE.Color(WING_ORANGE);
+    const stripe = new THREE.Color("#1f2a3c");
+    const cols = [orange, orange, stripe, stripe, orange];
+    g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(cols.flatMap((c) => [c.r, c.g, c.b])), 3));
+    g.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
+    const m = new THREE.Mesh(g, wingMat);
+    m.frustumCulled = false;
+    m.visible = false;
+    group.add(m);
+    geos.push(g);
+    return m;
+  })();
 
   const back = (() => {
     const g = new THREE.BufferGeometry();
@@ -399,6 +419,7 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
   const partQ = new THREE.Quaternion();
   const knee = new THREE.Vector3();
   const hip = new THREE.Vector3();
+  const hipEdge = new THREE.Vector3();
   // The trunk pivots at the neck; lying belly-to-earth tips it back 78 degrees.
   const NECK_Y = -0.16;
   const NECK_Z = 0.07;
@@ -430,9 +451,15 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         } else if (override) {
           tmp.copy(override);
         } else if (pose.mode === "freefall" && third) {
-          // Seen from outside: a relaxed box with bent elbows, or arms back to track.
+          // Seen from outside: a relaxed box with bent elbows, or arms back to track, or spread
+          // wide to hold a wingsuit open, the inside arm low in a turn.
+          const wing = pose.wing ?? 0;
           if (pose.reaching) tmp.set(s * 0.3, 0.2, -0.04);
           else tmp.set(s * 0.45, -0.02, -0.06).lerp(_a.set(s * 0.3, -0.3, 0.62), trackAmt);
+          if (!pose.reaching && wing > 0) {
+            tmp.lerp(_a.set(s * 0.72, -0.12, 0.2), wing);
+            tmp.y += pose.turn * s * 0.06 * wing;
+          }
           const flap = Math.min(pose.air / 55, 1) * 0.015;
           tmp.x += Math.sin(pose.time * 29 + s) * flap;
           tmp.y += Math.cos(pose.time * 23 + s * 2) * flap;
@@ -498,7 +525,7 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         }
       }
 
-      const wingAmt = !third && pose.mode === "freefall" ? (pose.wing ?? 0) : 0;
+      const wingAmt = pose.mode === "freefall" ? (pose.wing ?? 0) : 0;
       for (let i = 0; i < 2; i++) {
         const arm = arms[i]!;
         const m = wings[i]!;
@@ -513,6 +540,10 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         const pos = m.geometry.getAttribute("position") as THREE.BufferAttribute;
         const slack = 1 - wingAmt;
         const ripple = Math.sin(pose.time * 37 + s) * 0.008 * wingAmt;
+        // The trailing edge's root at the hip: behind the eyes where the first-person body lies
+        // in flight, or on the leaned trunk seen from outside.
+        if (third) tp(hipEdge, s * 0.2, -0.84, 0.07);
+        else hipEdge.set(s * 0.24, -0.33, 0.62);
         for (let i = 0; i < 3; i++) {
           // The arm is the leading edge: shoulder, elbow, wrist. The root rides over the top
           // of the shoulder, where the suit's back joins it.
@@ -520,11 +551,11 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
           else _a.copy(i === 1 ? arm.elbowPos : arm.wrist);
           // The trailing edge runs from the hip, behind the eyes where the body lies in flight,
           // out to a hand's width behind the wrist, curving in a little between them.
-          if (i === 0) _b.set(s * 0.24, -0.33, 0.62);
+          if (i === 0) _b.copy(hipEdge);
           else if (i === 2) _b.copy(arm.wrist).add(_c.set(-s * 0.03, -0.02, 0.2));
           else {
             _b.copy(arm.wrist).add(_c.set(-s * 0.03, -0.02, 0.2));
-            _b.lerp(_c.set(s * 0.24, -0.33, 0.62), 0.5);
+            _b.lerp(hipEdge, 0.5);
             _b.x -= s * 0.03;
             _b.y += ripple;
           }
@@ -541,7 +572,19 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         pos.needsUpdate = true;
         m.geometry.computeVertexNormals();
       }
-      back.visible = wingAmt > 0.02;
+      if (third) {
+        // Outside, the whole suit is the wing's color.
+        const m = wingAmt > 0.5 ? wingTop : suit;
+        torso.material = m;
+        chest.material = m;
+        for (const leg of legs) {
+          leg.thigh.material = m;
+          leg.shin.material = m;
+          leg.knee.material = m;
+        }
+      }
+      tail.visible = third && wingAmt > 0.02;
+      back.visible = !third && wingAmt > 0.02;
       if (back.visible) {
         // The suit's back between the wing roots, with the rig down the middle.
         const pos = back.geometry.getAttribute("position") as THREE.BufferAttribute;
@@ -606,8 +649,10 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         const s = leg.side;
         tp(hip, s * 0.09, -0.78, 0.07);
         if (prone) {
-          // Belly-to-earth: knees down, shins up behind. Tracking straightens the legs.
+          // Belly-to-earth: knees down, shins up behind. Tracking straightens the legs, and a
+          // wingsuit spreads them to open the tail wing.
           tmp.set(s * 0.2, -1.38, 0.32).lerp(_a.set(s * 0.13, -1.62, 0.12), trackAmt);
+          if (wingAmt > 0) tmp.lerp(_a.set(s * 0.27, -1.6, 0.1), wingAmt);
           tp(tmp, tmp.x, tmp.y, tmp.z);
         } else if (pose.mode === "seated") {
           // Straddling a bench: feet flat on the floor either side of it.
@@ -637,6 +682,8 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
         place(leg.thigh, hip, knee);
         place(leg.shin, knee, ankle);
         leg.knee.position.copy(knee);
+        leg.kneeAt.copy(knee);
+        leg.ankleAt.copy(ankle);
         if (prone) {
           // Pointed toes, along the shin.
           _b.subVectors(ankle, knee).normalize();
@@ -646,6 +693,18 @@ export function createBody(opts: { thirdPerson?: boolean; look?: BodyLook } = {}
           leg.foot.position.copy(ankle).add(_b.set(0, -0.03, -0.08));
           leg.foot.rotation.set(hanging ? 0.35 - pose.flare * 0.45 : 0, 0, 0);
         }
+      }
+      if (tail.visible) {
+        const pos = tail.geometry.getAttribute("position") as THREE.BufferAttribute;
+        const [l, r] = legs as [(typeof legs)[0], (typeof legs)[0]];
+        tp(_a, 0, -0.9, 0.09);
+        pos.setXYZ(0, _a.x, _a.y, _a.z);
+        pos.setXYZ(1, l.kneeAt.x, l.kneeAt.y, l.kneeAt.z);
+        pos.setXYZ(2, l.ankleAt.x, l.ankleAt.y, l.ankleAt.z);
+        pos.setXYZ(3, r.ankleAt.x, r.ankleAt.y, r.ankleAt.z);
+        pos.setXYZ(4, r.kneeAt.x, r.kneeAt.y, r.kneeAt.z);
+        pos.needsUpdate = true;
+        tail.geometry.computeVertexNormals();
       }
     },
     dispose() {

@@ -27,8 +27,8 @@ import {
 } from "./constants";
 import { loadSave, writeSave } from "./save";
 import type { Bridge, Hud, JumpMode, Outcome, Phase, Ride, Suit } from "./types";
-import { EYE_UP, createBody, type BodyMode, type Gesture } from "./body";
-import { CANOPY_EYE_Y, createCanopy, togglePosition } from "./canopy";
+import { EYE_UP, PLAYER_LOOK, createBody, type BodyMode, type BodyPose, type Gesture } from "./body";
+import { CANOPY_EYE_Y, COLLAPSE_S, createCanopy, settleCanopy, togglePosition } from "./canopy";
 import { dressCabin } from "./cabin";
 import { BASE_FALL, BREAKOFF_FT, LOOKS, createFormation } from "./formation";
 import { createCloudField } from "./clouds";
@@ -49,8 +49,10 @@ import {
   createHeli,
   type BalloonTheme,
 } from "./rides";
+import { createDirector, type Director } from "./replay";
 import { createCourse, planFlat, planGates, type RingKind, type RingSpec } from "./rings";
 import type { Contact, Solid } from "./solids";
+import { FRAME_SIZE, GESTURES, MODES, PHASES, PLAYER, REC_HZ, RIDES, createTape } from "./tape";
 import { createWing, flyWing, pathPitch, wingFill, type Wing } from "./wingsuit";
 import { SUN_DIR, applyLight, cityTexture, createAtmosphere, createWaterMaterial, streetLights } from "./world";
 
@@ -678,6 +680,10 @@ export function mountGame(
   const canopy = canopyRig.group;
   const body = createBody();
   scene.add(body.group);
+  // You as the replay shows you, from outside.
+  const actor = createBody({ thirdPerson: true, look: PLAYER_LOOK });
+  actor.group.visible = false;
+  scene.add(actor.group);
   const formation = createFormation(scene);
   // Phones get fewer, bigger puffs: the same clouds for less overdraw.
   const cloudField = createCloudField(scene, coarse ? 0.6 : 1);
@@ -818,6 +824,19 @@ export function mountGame(
   /** This jump flies a ring course; the course's seed, kept when you jump the same jump again. */
   let ringsOn = false;
   let courseSeed = (Math.random() * 2 ** 31) | 0;
+  /** This jump on tape for the replay; while one plays, its director and the frame on screen. */
+  const rec = createTape();
+  let recAt = -1;
+  let recUntil = Infinity;
+  /** How open the canopy is drawn, for the tape. */
+  let canopyU = 0;
+  let director: Director | null = null;
+  const shown = new Float32Array(FRAME_SIZE);
+  let shownPhase: Phase = "menu";
+  /** The formation as it stood when a replay started, to put back after. */
+  const liveCrew = new Float32Array(FRAME_SIZE);
+  /** Tape time of the touchdown, for the canopy folding down in the replay. */
+  let landT = -1;
   const lzPos = new THREE.Vector3();
   const keys = new Set<string>();
   let qaKeys: Set<string> | null = null;
@@ -860,6 +879,7 @@ export function mountGame(
     outcome: null,
     canopy: "none",
     needsLook: false,
+    replay: null,
     save: { bestM: save.bestM, bestScore: save.bestScore, jumps: save.jumps, rides: save.rides },
   };
 
@@ -925,6 +945,10 @@ export function mountGame(
     spinR = 0;
     stableS = null;
     course.clear();
+    rec.reset(simTime);
+    recAt = -1;
+    recUntil = Infinity;
+    canopyU = 0;
     audio.resetDeath();
     audio.resume();
   }
@@ -1086,6 +1110,8 @@ export function mountGame(
   function finishImpact(reason: string) {
     if (phase === "impact" || phase === "down") return;
     phase = "impact";
+    // The tape stops here: the replay cuts away as you go in.
+    recUntil = simTime;
     pos.y = Math.max(pos.y, 0);
     vel.set(0, 0, 0);
     pushLog(reason);
@@ -1155,6 +1181,8 @@ export function mountGame(
     else pushLog(water ? "Water landing" : `Down · ${Math.round(dist)} m`);
     if (outcome) outcome.log = log.slice();
     phase = "down";
+    // A few seconds on your feet for the replay to end on.
+    recUntil = simTime + 5;
     persist();
   }
 
@@ -1528,6 +1556,7 @@ export function mountGame(
     const pullEdge = (bridge.pull && !prevPull) || edgeOf("Space");
     const cutEdge = (bridge.cut && !prevCut) || edgeOf("KeyX") || edgeOf("KeyC");
     const reserveEdge = (bridge.reserve && !prevReserve) || edgeOf("KeyR");
+    const endEdge = edgeOf("Escape");
     // Shift runs; on a touch screen, the stick pushed all the way out.
     const run = source.has("ShiftLeft") || source.has("ShiftRight") || Math.hypot(bridge.moveX, bridge.moveY) > 0.92;
     prevJump = bridge.jump;
@@ -1536,7 +1565,7 @@ export function mountGame(
     prevReserve = bridge.reserve;
     if (qaKeys) prevQa = new Set(qaKeys);
     else eventEdges.clear();
-    return { turn, strafe, forward, run, jumpEdge, pullEdge, cutEdge, reserveEdge };
+    return { turn, strafe, forward, run, jumpEdge, pullEdge, cutEdge, reserveEdge, endEdge };
   }
 
   function step(dt: number, input: ReturnType<typeof sample> | null) {
@@ -1581,7 +1610,8 @@ export function mountGame(
     pads.update(simTime);
     course.update(simTime, camera.position);
     sock.rotation.y = Math.sin(simTime * 7) * 0.12;
-    moveRides(dt);
+    // In a replay the rides fly as the tape has them.
+    if (!director) moveRides(dt);
     (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity =
       Math.sin(simTime * 8) > 0.4 ? 2 : 0.15;
 
@@ -1836,16 +1866,20 @@ export function mountGame(
       canopy.rotation.set(0, heading, bank * 0.45);
       canopyRig.setReserve(flying === "reserve" || deployingReserve);
       canopyRig.update(u, brakeL, brakeR);
+      canopyU = u;
     }
     streamer.visible = mal === "streamer" && (phase === "deploying" || phase === "malfunction");
-    if (streamer.visible) {
-      streamer.position.copy(pos);
-      for (let i = 0; i < ribs.length; i++) {
-        const rib = ribs[i];
-        if (!rib) continue;
-        rib.position.set(Math.sin(simTime * 6 + i) * 0.35, 1.2 + i * 0.85, Math.cos(simTime * 5 + i) * 0.25);
-        rib.rotation.z = Math.sin(simTime * 4 + i) * 0.4;
-      }
+    if (streamer.visible) waveStreamer(pos, simTime);
+  }
+
+  /** The streamer flogging above you: a column of fabric that never inflates. */
+  function waveStreamer(at: THREE.Vector3, time: number) {
+    streamer.position.copy(at);
+    for (let i = 0; i < ribs.length; i++) {
+      const rib = ribs[i];
+      if (!rib) continue;
+      rib.position.set(Math.sin(time * 6 + i) * 0.35, 1.2 + i * 0.85, Math.cos(time * 5 + i) * 0.25);
+      rib.rotation.z = Math.sin(time * 4 + i) * 0.4;
     }
   }
 
@@ -2518,6 +2552,15 @@ export function mountGame(
     hud.dzDist = Math.hypot(dx, dz);
     hud.dzLabel = mode === "base" ? "LZ" : "DZ";
     hud.outcome = outcome;
+    hud.replay = director
+      ? {
+          shot: director.shot().title,
+          speed: director.speed(),
+          progress: clamp((director.time() - director.start) / Math.max(1, director.end - director.start), 0, 1),
+          // From the eyes: aboard a ride the physics point stays where you boarded.
+          altFt: Math.max(0, shown[PLAYER.at.eye + 1]! - EYE_UP) * FT_PER_M,
+        }
+      : null;
     hud.canopy = flying;
     hud.needsLook =
       !coarse &&
@@ -2527,7 +2570,8 @@ export function mountGame(
     onFrame(hud);
   }
 
-  function frameCamera() {
+  /** The sky, haze and fog follow the camera. */
+  function skyFollow() {
     sky.position.copy(camera.position);
     const h = camera.position.y;
     const t = clamp(h / 4500, 0, 1);
@@ -2537,6 +2581,10 @@ export function mountGame(
     waterUniforms.uFogFar.value = fog.far;
     atmo.setViewHeight(h);
     atmo.update(simTime);
+  }
+
+  function frameCamera() {
+    skyFollow();
     if (phase === "menu") {
       // Title shot: drifting over the harbor with downtown ahead.
       camera.position.set(
@@ -2757,6 +2805,311 @@ export function mountGame(
     shadows.update(casters, camera.position);
   }
 
+  /** You as the replay will draw you, from outside: the eye frame and pose, into tape frame f. */
+  function outside(f: Float32Array) {
+    const A = PLAYER.at;
+    let shape: BodyMode = "freefall";
+    let lean = 1;
+    let track = 0;
+    let suitAmt = 0;
+    let reach = false;
+    let flare = 0;
+    const eye = _v3;
+    if (phase === "cabin") {
+      shape = "cabin";
+      lean = 0;
+      plane.localToWorld(eye.set(riderX, 1.5, riderZ));
+      _q.setFromEuler(_e.set(0, localYaw, 0, "YXZ")).premultiply(plane.quaternion);
+    } else if (phase === "aboard") {
+      const v = ride === "heli" ? heli.group : balloon.group;
+      lean = 0;
+      if (ride === "heli") {
+        shape = "perch";
+        eye.copy(HELI_SEAT);
+        _e.set(0, HELI_SEAT_YAW, 0, "YXZ");
+      } else {
+        shape = "cabin";
+        eye.set(riderX, STAND_EYE, riderZ);
+        _e.set(0, localYaw, 0, "YXZ");
+      }
+      v.localToWorld(eye);
+      _q.setFromEuler(_e).premultiply(v.quaternion);
+    } else if (phase === "roof") {
+      shape = "cabin";
+      lean = 0;
+      eye.set(pos.x, pos.y + STAND_EYE, pos.z);
+      _q.setFromEuler(_e.set(0, localYaw, 0, "YXZ"));
+    } else if (phase === "impact") {
+      shape = "hidden";
+      eye.copy(pos);
+      _q.identity();
+    } else if (phase === "canopy" || phase === "down" || (phase === "malfunction" && mal === "twist")) {
+      // In the harness, or on your feet.
+      shape = phase === "down" ? "down" : "canopy";
+      lean = 0;
+      reach = phase === "malfunction";
+      eye.copy(pos).y += EYE_UP;
+      _q.setFromEuler(_e.set(0, heading, phase === "canopy" ? bank * 0.45 : 0, "YXZ"));
+      if (phase === "canopy") flare = clamp((30 - (pos.y - floorY)) / 25, 0, 1);
+    } else if (phase === "deploying" && mal === "none") {
+      // Swinging up under the opening canopy, as the formation's jumpers do.
+      const u = smooth(clamp(openT / openDur(), 0, 1));
+      shape = openT > 0.9 ? "canopy" : "freefall";
+      lean = 1 - u;
+      reach = true;
+      eye.copy(pos).y += THREE.MathUtils.lerp(0.32, EYE_UP, u);
+      _q.setFromEuler(_e.set(-0.18 * (1 - u), heading, bank * 0.45 * u, "YXZ"));
+    } else if (mal !== "none") {
+      // Under a streamer, or a twist still winding up: feet first, reaching for the risers.
+      lean = 0.35;
+      reach = true;
+      eye.copy(pos).y += 0.9;
+      _q.setFromEuler(_e.set(-0.1, bodyYaw, bank, "YXZ"));
+    } else {
+      // Off the exit you settle from how you left, crouched in a door or standing on a roof,
+      // to flat in the air. Off the helicopter or the balloon you roll straight off head first.
+      const settle = smooth(clamp((simTime - exitTime) / (mode === "base" ? 1.2 : 0.7), 0, 1));
+      const hop = ride === "heli" || ride === "balloon";
+      const from = ride === "plane" ? 1.45 : ride === "heli" ? 0.67 : ride === "balloon" ? 0.6 : STAND_EYE;
+      eye.copy(pos).y += THREE.MathUtils.lerp(from, 0.32, settle);
+      lean = hop ? 1 : settle;
+      if (wing) {
+        // A wingsuit lies along the line it flies, nose a little up into the air.
+        suitAmt = wingFill(wing);
+        const line = pathPitch(vel, WIND_X, WIND_Z) * 0.85 - 0.05 - wing.pitch * 0.12;
+        _q.setFromEuler(_e.set(THREE.MathUtils.lerp(-0.18, line, suitAmt), wing.yaw, wing.bank * 0.85, "YXZ"));
+      } else {
+        // Belly to earth; looking down dives you head first, and fast across the sky is a track.
+        track = clamp((Math.hypot(vel.x - WIND_X, vel.z - WIND_Z) - 10) / 18, 0, 1);
+        const pitch = -0.18 + Math.min(0, bodyPitch) * 0.75 - 0.15 * track + tumbleP;
+        _q.setFromEuler(_e.set(pitch, bodyYaw, bank * 0.6 + tumbleR, "YXZ"));
+      }
+    }
+    f[A.mode] = MODES.indexOf(shape);
+    f.set([eye.x, eye.y, eye.z], A.eye);
+    f.set([_q.x, _q.y, _q.z, _q.w], A.q);
+    f[A.lean] = lean;
+    f[A.track] = track;
+    f[A.wing] = suitAmt;
+    f[A.reach] = reach ? 1 : 0;
+    f[A.gesture] = GESTURES.indexOf(gesture && simTime - gestureStart < 1.2 ? gesture : null);
+    f[A.gestureT] = simTime - gestureStart;
+    f[A.forward] = lastInput?.forward ?? 0;
+    f[A.turn] = lastInput?.turn ?? 0;
+    f[A.flare] = flare;
+    f[A.air] = vel.length();
+    f[A.walk] = walk;
+    f[A.brakeL] = brakeL;
+    f[A.brakeR] = brakeR;
+  }
+
+  /** Puts the jump on tape, REC_HZ times a second, from the walk to the door until just after it ends. */
+  function recordTick() {
+    if (phase === "menu" || simTime > recUntil) return;
+    if (recAt >= 0 && simTime - recAt < 1 / REC_HZ - 1e-6) return;
+    recAt = simTime;
+    const A = PLAYER.at;
+    const f = new Float32Array(FRAME_SIZE);
+    f[A.t] = simTime - rec.t0;
+    f[A.phase] = PHASES.indexOf(phase);
+    outside(f);
+    f[A.canopy] = canopy.visible ? canopyU : 0;
+    f.set([canopy.position.x, canopy.position.y, canopy.position.z], A.canopyPos);
+    const cq = canopy.quaternion;
+    f.set([cq.x, cq.y, cq.z, cq.w], A.canopyQ);
+    f[A.reserve] = flying === "reserve" || deployingReserve ? 1 : 0;
+    f[A.streamer] = streamer.visible ? 1 : 0;
+    f.set([pos.x, pos.y, pos.z], A.pos);
+    f.set([vel.x, vel.y, vel.z], A.vel);
+    f[A.ride] = RIDES.indexOf(ride);
+    const r = ride === "heli" ? heli.group : ride === "balloon" ? balloon.group : ride === "plane" ? plane : null;
+    if (r) {
+      f.set([r.position.x, r.position.y, r.position.z], A.ridePos);
+      f.set([r.quaternion.x, r.quaternion.y, r.quaternion.z, r.quaternion.w], A.rideQ);
+      f[A.rideOn] = r.visible ? 1 : 0;
+    } else f[A.rideQ + 3] = 1;
+    f[A.burn] = burn;
+    fleet.forEach((b, i) => {
+      const g = b.b.group;
+      f.set([g.position.x, g.position.y, g.position.z, g.rotation.y], A.fleet + i * 4);
+    });
+    formation.record(f);
+    rec.push(f, phase === "cabin" || phase === "aboard" || phase === "roof");
+  }
+
+  const actorFrame = new THREE.Matrix4();
+  const actorFeet = new THREE.Vector3();
+  const actorL = new THREE.Vector3();
+  const actorR = new THREE.Vector3();
+  const actorPose: BodyPose = {
+    mode: "hidden",
+    forward: 0,
+    turn: 0,
+    leftHand: null,
+    rightHand: null,
+    gesture: null,
+    gestureT: 0,
+    walk: 0,
+    flare: 0,
+    air: 0,
+    altFt: 0,
+    time: 0,
+    reaching: false,
+    lean: 0,
+    trackAmt: 0,
+    wing: 0,
+  };
+  /** Camera shots that ride along with you, where the air should rush past. */
+  const RIDE_ALONG = new Set(["chase", "flyer", "orbit", "below", "formation", "ringsDown", "wingChase", "wingFront"]);
+
+  /** Draws the jump as tape frame f has it: you, your canopy, the ride you left and the formation. */
+  function showFrame(f: Float32Array, dt: number) {
+    const A = PLAYER.at;
+    const t = rec.t0 + f[A.t]!;
+    const was = shownPhase;
+    shownPhase = PHASES[f[A.phase]!] ?? "menu";
+    const p = actorPose;
+    p.mode = MODES[f[A.mode]!] ?? "hidden";
+    p.lean = f[A.lean]!;
+    p.trackAmt = f[A.track]!;
+    p.wing = f[A.wing]!;
+    p.reaching = f[A.reach] === 1;
+    p.gesture = GESTURES[f[A.gesture]!] ?? null;
+    p.gestureT = f[A.gestureT]!;
+    p.forward = f[A.forward]!;
+    p.turn = f[A.turn]!;
+    p.flare = f[A.flare]!;
+    p.air = f[A.air]!;
+    p.walk = f[A.walk]!;
+    p.altFt = Math.max(0, f[A.pos + 1]!) * FT_PER_M;
+    p.time = t;
+    p.leftHand = null;
+    p.rightHand = null;
+    if (p.mode === "canopy" && !p.reaching) {
+      p.leftHand = togglePosition(actorL, -1, f[A.brakeL]!);
+      p.rightHand = togglePosition(actorR, 1, f[A.brakeR]!);
+      actorL.y -= CANOPY_EYE_Y;
+      actorR.y -= CANOPY_EYE_Y;
+    }
+    actorFrame.compose(_v3.fromArray(f, A.eye), _q.fromArray(f, A.q), one);
+    actor.update(actorFrame, p, dt);
+    body.group.visible = false;
+
+    // Your canopy, which surges on past you once you land and settles onto the ground ahead.
+    let u = f[A.canopy]!;
+    let fold = 0;
+    if (shownPhase === "down" && landT >= 0) {
+      fold = smooth(clamp((f[A.t]! - landT) / COLLAPSE_S, 0, 1));
+      u = 1 - fold * 0.8;
+    }
+    canopy.visible = u > 0.02;
+    if (canopy.visible) {
+      canopy.position.fromArray(f, A.canopyPos);
+      canopy.quaternion.fromArray(f, A.canopyQ);
+      settleCanopy(canopy, fold);
+      canopyRig.setReserve(f[A.reserve] === 1);
+      canopyRig.update(u, f[A.brakeL]!, f[A.brakeR]!);
+    }
+    if ((shownPhase === "deploying" || shownPhase === "canopy") && was !== shownPhase && was !== "menu") audio.fabric();
+    streamer.visible = f[A.streamer] === 1;
+    if (streamer.visible) waveStreamer(actorFeet.fromArray(f, A.pos), t);
+
+    const r = RIDES[f[A.ride]!] ?? "roof";
+    const on = f[A.rideOn] === 1;
+    if (r === "plane") {
+      plane.position.fromArray(f, A.ridePos);
+      plane.quaternion.fromArray(f, A.rideQ);
+    } else if (r === "heli") {
+      heli.group.visible = on;
+      heli.group.position.fromArray(f, A.ridePos);
+      heli.group.quaternion.fromArray(f, A.rideQ);
+      heli.group.updateMatrixWorld();
+      if (on) heli.update(dt, t, false);
+    } else if (r === "balloon") {
+      balloon.group.visible = true;
+      balloon.group.position.fromArray(f, A.ridePos);
+      balloon.group.quaternion.fromArray(f, A.rideQ);
+      balloon.group.updateMatrixWorld();
+      balloon.update(dt, t, f[A.burn]!);
+      fleet.forEach((b, i) => {
+        b.b.group.visible = true;
+        b.b.group.position.fromArray(f, A.fleet + i * 4);
+        b.b.group.rotation.y = f[A.fleet + i * 4 + 3]!;
+        b.b.update(dt, t, b.burn);
+      });
+    }
+
+    formation.play(f);
+    formation.draw(dt, t);
+    course.rewind(t);
+    course.update(t, camera.position);
+
+    casters.length = 0;
+    const aloft = p.mode !== "hidden" && shownPhase !== "cabin" && shownPhase !== "aboard" && shownPhase !== "roof";
+    if (aloft) casters.push({ feet: actorFeet.fromArray(f, A.pos), wing: canopy.visible ? canopy : null });
+    formation.casters(casters);
+    shadows.update(casters, camera.position);
+
+    // The air rushes past a camera flying with you; a camera standing still hears it go by.
+    cloudDensity = cloudField.update(camera, fog.near, fog.far);
+    const falling = shownPhase === "freefall" || shownPhase === "deploying" || shownPhase === "malfunction";
+    const along = RIDE_ALONG.has(director?.shot().kind ?? "");
+    airVel.set(f[A.vel]! - WIND_X, f[A.vel + 1]!, f[A.vel + 2]! - WIND_Z);
+    const rush = falling ? clamp(airVel.length() / 60, 0, 1) : 0;
+    streaks.update(camera.position, airVel, reduce || !along ? 0 : rush * 0.45);
+    audio.setMuted(bridge.muted);
+    const near = (at: THREE.Vector3, range: number) => clamp(1 - at.distanceTo(camera.position) / range, 0, 1) ** 2;
+    audio.vehicle(
+      heli.group.visible ? 0.55 * near(heli.group.position, 700) : 0,
+      balloon.group.visible ? f[A.burn]! * near(balloon.group.position, 350) : 0,
+    );
+    const close = along ? 1 : near(actorFeet.fromArray(f, A.pos), 160);
+    if (falling) audio.update(rush * 0.32 * close + 0.02, 0, f[A.air]!);
+    else if (shownPhase === "canopy") audio.update(0.045, 0, 12);
+    else audio.update(0.03, 0, 8);
+  }
+
+  /** Plays the next frame of the replay; false once it has run out. */
+  function playReplay(dt: number) {
+    if (!director || !director.advance(dt)) return false;
+    rec.sample(director.time(), shown);
+    director.aim(shown, camera, dt);
+    skyFollow();
+    showFrame(shown, dt);
+    return true;
+  }
+
+  function startReplay() {
+    if (!outcome || director) return;
+    director = createDirector(rec, { clear: clearCam, rings: ringsOn });
+    if (!director) return;
+    formation.record(liveCrew);
+    const down = rec.frames.find((fr) => PHASES[fr[PLAYER.at.phase]!] === "down");
+    landT = down ? down[PLAYER.at.t]! : -1;
+    shownPhase = "menu";
+    if (document.pointerLockElement) void document.exitPointerLock();
+  }
+
+  /** Back from the replay to where the jump really is: on the ground, with the debrief. */
+  function stopReplay() {
+    if (!director) return;
+    director = null;
+    canopy.scale.setScalar(1);
+    formation.play(liveCrew);
+    course.rewind(Infinity);
+    actor.group.visible = false;
+    canopy.visible = false;
+    streamer.visible = false;
+    moveRides(0);
+  }
+
+  /** Keeps a replay camera out of the buildings and above the ground: in toward `subject` until clear. */
+  function clearCam(cam: THREE.Vector3, subject: THREE.Vector3) {
+    for (let i = 0; i < 14 && solids.blocked(cam.x, cam.y - 0.6, cam.z, 0.6, 1.2); i++) cam.lerp(subject, 0.2);
+    const floor = solids.top(cam.x, cam.z, cam.y + 1)?.y1 ?? 0;
+    cam.y = Math.max(cam.y, floor + 0.8);
+  }
+
   // Clouds and the air rushing past: how deep in cloud the eye is, the whiteout veil, and
   // streaks that scale with airspeed (and thicken inside a cloud).
   function airFx() {
@@ -2805,6 +3158,8 @@ export function mountGame(
     const frameDt = Math.min(timer.getDelta(), 0.05);
     const command = bridge.command;
     bridge.command = null;
+    // Anything but the replay's own buttons stops a replay first.
+    if (director && command && command !== "replayNext" && command !== "replayEnd") stopReplay();
     // A new course from the menu; jumping again flies the same one.
     if (command === "start" && phase === "menu") {
       courseSeed = (Math.random() * 2 ** 31) | 0;
@@ -2813,7 +3168,13 @@ export function mountGame(
     else if (command === "again") backToMenu();
     else if (command === "retry") begin();
     else if (command === "base") baseFromHere();
+    else if (command === "replay") startReplay();
+    else if (command === "replayNext" && director && !director.next()) stopReplay();
+    else if (command === "replayEnd") stopReplay();
     const input = sample();
+    // In a replay Space skips to the next shot and Escape stops it.
+    if (director && input.jumpEdge && !director.next()) stopReplay();
+    if (director && input.endEdge) stopReplay();
     if (lastInput) {
       // A frame too short for a physics step must not swallow a key press: carry it over.
       input.jumpEdge ||= lastInput.jumpEdge;
@@ -2825,7 +3186,9 @@ export function mountGame(
     acc += frameDt;
     let guard = 0;
     while (acc >= 1 / 60 && guard < 5) {
-      if (lastInput) step(1 / 60, lastInput);
+      // During a replay the world goes on living, but you are on tape.
+      if (lastInput) step(1 / 60, director ? null : lastInput);
+      if (!director) recordTick();
       if (lastInput) {
         lastInput.jumpEdge = false;
         lastInput.pullEdge = false;
@@ -2835,15 +3198,18 @@ export function mountGame(
       acc -= 1 / 60;
       guard++;
     }
-    frameCamera();
-    airFx();
-    poseBody(frameDt);
-    formation.draw(frameDt, simTime);
-    castShadows();
-    audioMix();
+    if (director && !playReplay(frameDt)) stopReplay();
+    if (!director) {
+      frameCamera();
+      airFx();
+      poseBody(frameDt);
+      formation.draw(frameDt, simTime);
+      castShadows();
+      audioMix();
+    }
     publish(lastInput?.forward ?? 0);
     cabin.update(frameDt, {
-      aboard: phase === "menu" || phase === "cabin",
+      aboard: director ? shownPhase === "cabin" : phase === "menu" || phase === "cabin",
       green,
       spot: spotShort,
       time: simTime,
@@ -2915,7 +3281,7 @@ export function mountGame(
   }
   function onClick() {
     audio.resume();
-    if (coarse || phase === "menu") return;
+    if (coarse || phase === "menu" || director) return;
     const opts = { unadjustedMovement: true } as PointerLockOptions;
     const ret = canvas.requestPointerLock(opts) as unknown as Promise<void> | void;
     if (ret && typeof (ret as Promise<void>).catch === "function") {
@@ -3013,6 +3379,7 @@ export function mountGame(
     fleet.forEach((f) => f.b.dispose());
     course.dispose();
     body.dispose();
+    actor.dispose();
     formation.dispose();
     normalTex.dispose();
     if (window.__controlsTest === controlsTest) delete window.__controlsTest;

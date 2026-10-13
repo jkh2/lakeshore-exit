@@ -101,8 +101,11 @@ export type Bridge = {
   suit: Suit;
   rings: boolean;
   muted: boolean;
-  /** Start from the menu, back to the menu, the same jump again, or BASE off the roof you landed on. */
-  command: "start" | "again" | "retry" | "base" | null;
+  /**
+   * Start from the menu, back to the menu, the same jump again, BASE off the roof you landed
+   * on, or watch the replay: start it, skip to its next shot, or stop it.
+   */
+  command: "start" | "again" | "retry" | "base" | "replay" | "replayNext" | "replayEnd" | null;
   moveX: number;
   moveY: number;
   lookX: number;
@@ -145,6 +148,8 @@ export type Hud = {
   outcome: Outcome | null;
   canopy: "none" | "main" | "reserve";
   needsLook: boolean;
+  /** While a replay plays: the shot's name, the playback speed, how far through it is (0..1) and the altitude on screen. */
+  replay: { shot: string; speed: number; progress: number; altFt: number } | null;
   save: Pick<Save, "bestM" | "bestScore" | "jumps" | "rides">;
 };
 

@@ -90,6 +90,11 @@
   animation: impact-flash 520ms linear forwards;
 }
 
+/* Back from a replay of the impact: just the dark, no second flash. */
+.impact-black.is-held {
+  opacity: 1;
+}
+
 @keyframes impact-flash {
   0% {
     background: #fff;
@@ -124,6 +129,40 @@
   }
 }
 
+/* The replay's letterbox: black bars slide in top and bottom, with a blinking record dot. */
+.replay-bar {
+  height: max(3.25rem, 9vh);
+  background: #000;
+  animation: bar-in 420ms ease both;
+}
+
+.replay-top {
+  --bar-from: -100%;
+}
+
+.replay-bottom {
+  --bar-from: 100%;
+}
+
+@keyframes bar-in {
+  from {
+    transform: translateY(var(--bar-from));
+  }
+  to {
+    transform: none;
+  }
+}
+
+.replay-dot {
+  animation: rec-blink 1.2s steps(1) infinite;
+}
+
+@keyframes rec-blink {
+  50% {
+    opacity: 0.15;
+  }
+}
+
 .touch-ui {
   display: none;
 }
@@ -147,7 +186,9 @@
 @media (prefers-reduced-motion: reduce) {
   .warning-live,
   .warning-fast,
-  .debrief-late {
+  .debrief-late,
+  .replay-bar,
+  .replay-dot {
     animation: none;
   }
 

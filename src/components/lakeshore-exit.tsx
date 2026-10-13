@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { clsx } from "clsx";
-import { AlertTriangle, Bird, Building2, Cloud, Plane, RotateCcw, Star, Users, Volume2, VolumeX } from "lucide-react";
+import {
+  AlertTriangle,
+  Bird,
+  Building2,
+  Cloud,
+  Film,
+  Plane,
+  RotateCcw,
+  SkipForward,
+  Star,
+  Users,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { cardinal, describeOutcome } from "@/game/grade";
 import { loadSave, writeSave } from "@/game/save";
 import {
@@ -78,6 +91,9 @@ export function LakeshoreExit() {
   const baseLabelRef = useRef<HTMLDivElement>(null);
   const poseRef = useRef<HTMLDivElement>(null);
   const lightRef = useRef<HTMLDivElement>(null);
+  const replayBarRef = useRef<HTMLDivElement>(null);
+  const replayAltRef = useRef<HTMLDivElement>(null);
+  const replaySpeedRef = useRef<HTMLDivElement>(null);
   const bridgeRef = useRef<Bridge>(createBridge());
   const onFrame = useRef<(hud: Hud) => void>(() => {});
 
@@ -92,6 +108,10 @@ export function LakeshoreExit() {
   const [prompt, setPrompt] = useState("");
   const [needsLook, setNeedsLook] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [replay, setReplay] = useState(false);
+  // This jump has been replayed: the impact flash and the slow debrief have already played once.
+  const [watched, setWatched] = useState(false);
+  const [shot, setShot] = useState("");
   const [canopy, setCanopy] = useState<"none" | "main" | "reserve">("none");
   const [altitudeFt, setAltitudeFt] = useState(DEFAULT_EXIT_FT);
   const [hopFt, setHopFt] = useState(DEFAULT_HOP_FT);
@@ -109,6 +129,8 @@ export function LakeshoreExit() {
     prompt: "",
     needsLook: false,
     outcome: null as Outcome | null,
+    replay: false,
+    shot: "",
     canopy: "none" as "none" | "main" | "reserve",
     jumps: -1,
     best: null as number | null,
@@ -172,6 +194,25 @@ export function LakeshoreExit() {
     if (c.outcome !== hud.outcome) {
       c.outcome = hud.outcome;
       setOutcome(hud.outcome);
+      setWatched(false);
+    }
+    const r = hud.replay;
+    if (c.replay !== !!r) {
+      c.replay = !!r;
+      setReplay(!!r);
+      if (r) setWatched(true);
+    }
+    if (r) {
+      if (c.shot !== r.shot) {
+        c.shot = r.shot;
+        setShot(r.shot);
+      }
+      if (replayBarRef.current) replayBarRef.current.style.transform = `scaleX(${r.progress})`;
+      if (replayAltRef.current) replayAltRef.current.textContent = `${commas(r.altFt)} FT`;
+      if (replaySpeedRef.current) {
+        replaySpeedRef.current.textContent =
+          r.speed > 1.05 ? `${r.speed < 3 ? r.speed.toFixed(1) : Math.round(r.speed)}× SPEED` : r.speed < 0.95 ? "SLOW MOTION" : "";
+      }
     }
     if (c.canopy !== hud.canopy) {
       c.canopy = hud.canopy;
@@ -771,14 +812,55 @@ export function LakeshoreExit() {
         </aside>
       ) : null}
 
-      <div className={clsx("impact-black absolute inset-0 z-30", phase === "impact" && "is-on")} />
+      <div className={clsx("impact-black absolute inset-0 z-30", phase === "impact" && !replay && (watched ? "is-held" : "is-on"))} />
 
-      {outcome && copy ? (
+      {replay ? (
+        <div className="pointer-events-none absolute inset-0 z-40 font-display tracking-widest">
+          <div className="replay-bar replay-top absolute inset-x-0 top-0 flex items-center justify-between px-4 sm:px-6">
+            <div className="flex items-center gap-2 text-sm sm:text-base">
+              <span className="replay-dot size-2.5 rounded-full bg-signal" aria-hidden="true" />
+              <span className="text-fg">REPLAY</span>
+              <span className="text-muted">· {shot}</span>
+            </div>
+            <div className="text-right text-sm leading-tight sm:text-base">
+              <div ref={replayAltRef} className="text-fg" />
+              <div ref={replaySpeedRef} className="text-xs text-amber sm:text-sm" />
+            </div>
+          </div>
+          <div className="replay-bar replay-bottom pointer-events-auto absolute inset-x-0 bottom-0 flex items-center gap-3 px-4 sm:px-6">
+            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-white/15">
+              <div ref={replayBarRef} className="h-full origin-left bg-amber" style={{ transform: "scaleX(0)" }} />
+            </div>
+            <span className="hidden text-xs text-muted desk:inline">SPACE NEXT · ESC DONE</span>
+            <button
+              type="button"
+              className="flex h-10 items-center gap-1.5 rounded-md border border-line bg-ink/70 px-3 text-sm text-fg"
+              onClick={() => {
+                bridge.command = "replayNext";
+              }}
+            >
+              <SkipForward className="size-4" aria-hidden="true" />
+              Next shot
+            </button>
+            <button
+              type="button"
+              className="h-10 rounded-md bg-amber px-4 text-sm text-ink"
+              onClick={() => {
+                bridge.command = "replayEnd";
+              }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {outcome && copy && !replay ? (
         <div className="pointer-events-none absolute inset-0 z-40 grid place-items-center p-4">
           <section
             className={clsx(
               "pointer-events-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-line bg-panel p-5",
-              outcome.kind === "impact" && "debrief-late",
+              outcome.kind === "impact" && !watched && "debrief-late",
             )}
           >
             <p className="font-display text-sm tracking-[0.2em] text-muted">DEBRIEF</p>
@@ -795,10 +877,20 @@ export function LakeshoreExit() {
                 ))}
               </ol>
             </details>
+            <button
+              type="button"
+              className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-md border border-line bg-ink/60 font-display text-lg tracking-widest text-fg"
+              onClick={() => {
+                bridge.command = "replay";
+              }}
+            >
+              <Film className="size-5" aria-hidden="true" />
+              Watch the replay
+            </button>
             {outcome.canBase ? (
               <button
                 type="button"
-                className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-amber font-display text-xl tracking-widest text-ink"
+                className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-amber font-display text-xl tracking-widest text-ink"
                 onClick={() => {
                   bridge.command = "base";
                 }}
@@ -807,7 +899,7 @@ export function LakeshoreExit() {
                 BASE jump off {outcome.roof === "a rooftop" || !outcome.roof ? "this roof" : outcome.roof}
               </button>
             ) : null}
-            <div className={clsx("grid grid-cols-2 gap-2", outcome.canBase ? "mt-2" : "mt-5")}>
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 className={clsx(

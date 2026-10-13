@@ -167,6 +167,8 @@ export type Course = {
   close(time: number): number;
   /** Animates the rings; `eye` is the camera, so far rings can glow wider to stay in sight. */
   update(time: number, eye: THREE.Vector3): void;
+  /** Sets the course as it stood at `time`, for a replay; Infinity puts it back as it ended. */
+  rewind(time: number): void;
   dispose(): void;
 };
 
@@ -192,6 +194,9 @@ export function createCourse(): Course {
   let got = 0;
   let streak = 0;
   let laid = false;
+  let layAt = 0;
+  /** Every ring flown, missed or dropped, in order: which, how, its fade clock, and when. */
+  const events: { i: number; state: 1 | 2 | 3; at: number; when: number }[] = [];
 
   function clear() {
     for (const r of rings) {
@@ -204,13 +209,16 @@ export function createCourse(): Course {
     got = 0;
     streak = 0;
     laid = false;
+    events.length = 0;
+    group.visible = true;
   }
 
-  function mark(i: number, state: 1 | 2 | 3, time: number) {
+  function mark(i: number, state: 1 | 2 | 3, time: number, when = time) {
     const r = rings[i];
     if (!r) return;
     r.state = state;
     r.at = time;
+    events.push({ i, state, at: time, when });
   }
 
   /** Where segment a→b crosses ring i's plane going through it, or null. Fills _p. */
@@ -236,6 +244,7 @@ export function createCourse(): Course {
     lay(specs, kind, time) {
       clear();
       laid = true;
+      layAt = time;
       const g = geo[kind];
       for (const spec of specs) {
         const coreMat = new THREE.MeshBasicMaterial({
@@ -303,7 +312,7 @@ export function createCourse(): Course {
       let n = 0;
       // Only the lit ones have anything to fade.
       for (let i = idx; i < rings.length; i++, n++)
-        mark(i, 3, i - idx <= LIT_AHEAD ? time : time - 9);
+        mark(i, 3, i - idx <= LIT_AHEAD ? time : time - 9, time);
       idx = rings.length;
       return n;
     },
@@ -354,6 +363,22 @@ export function createCourse(): Course {
           r.haloMat.color.copy(COOL);
           r.haloMat.opacity = (0.06 + far * 0.3) * (1 - ahead * 0.12) * fade;
         }
+      }
+    },
+    rewind(time) {
+      group.visible = time >= layAt;
+      for (const r of rings) {
+        r.state = 0;
+        r.at = layAt;
+      }
+      idx = 0;
+      for (const e of events) {
+        if (e.when > time) break;
+        const r = rings[e.i];
+        if (!r) continue;
+        r.state = e.state;
+        r.at = e.at;
+        idx = Math.max(idx, e.i + 1);
       }
     },
     dispose() {

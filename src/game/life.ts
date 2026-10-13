@@ -26,6 +26,9 @@ type Mover = {
   color?: THREE.Color;
 };
 
+/** People and umbrellas this close to the camera step out of the way: they aren't drawn. */
+const PERSONAL_M = 2.4;
+
 const MOVE_SHADER = /* glsl */ `
   uniform float uTime;
   attribute vec4 aMove;
@@ -43,8 +46,17 @@ const MOVE_SHADER = /* glsl */ `
     return vec3(d, 1.0, smoothstep(0.0, 40.0, d) * smoothstep(aMove.y, aMove.y - 40.0, d));
   }`;
 
-/** Patches a material so each instance slides along its local -z by its `aMove` path. */
-function moving<M extends THREE.Material>(mat: M, time: THREE.IUniform<number>, key: string): M {
+/**
+ * Patches a material so each instance slides along its local -z by its `aMove` path. With
+ * `nearM`, an instance closer than that to the camera isn't drawn, so a replay camera set down
+ * on the beach isn't left staring into someone's shirt.
+ */
+function moving<M extends THREE.Material>(
+  mat: M,
+  time: THREE.IUniform<number>,
+  key: string,
+  nearM = 0,
+): M {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = time;
     shader.vertexShader = shader.vertexShader
@@ -61,6 +73,20 @@ function moving<M extends THREE.Material>(mat: M, time: THREE.IUniform<number>, 
          transformed.xz *= mv.y;
          transformed.z -= mv.x;`,
       );
+    if (nearM > 0) {
+      const near = "#include <common>\nvarying float vNear;";
+      shader.vertexShader = shader.vertexShader.replace("#include <common>", near).replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
+         vNear = distance((modelMatrix * instanceMatrix * vec4(0.0, 0.0, -mv.x, 1.0)).xyz, cameraPosition);`,
+      );
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", near)
+        .replace(
+          "#include <clipping_planes_fragment>",
+          `#include <clipping_planes_fragment>\nif (vNear < ${nearM.toFixed(2)}) discard;`,
+        );
+    }
   };
   mat.customProgramCacheKey = () => `mover-${key}`;
   return mat;
@@ -217,11 +243,12 @@ export function createLife(
   scene.add(root);
   const r = rng(91);
 
-  const solid = (key: string, side: THREE.Side = THREE.FrontSide) =>
+  const solid = (key: string, side: THREE.Side = THREE.FrontSide, nearM = 0) =>
     moving(
       new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.2, side }),
       time,
       key,
+      nearM,
     );
   // Cars sit a hair over the road, which is itself pulled forward in depth; keep them on top of it.
   const carMat = onTop(solid("car"), 4);
@@ -750,8 +777,8 @@ export function createLife(
   for (const p of standing) p.color = pick(r, SHIRTS);
   for (const p of lying) p.color = pick(r, BRIGHT);
   const skinTone = (list: Mover[]) => list.map((p) => ({ ...p, color: pick(r, SKIN) }));
-  const flesh = solid("flesh");
-  const cloth = solid("cloth");
+  const flesh = solid("flesh", THREE.FrontSide, PERSONAL_M);
+  const cloth = solid("cloth", THREE.FrontSide, PERSONAL_M);
   fleet(root, skinTone(standing), [{ geo: skinPart, mat: flesh, tint: true }]);
   fleet(root, standing, [{ geo: clothesPart, mat: cloth, tint: true }]);
   fleet(root, skinTone(lying), [{ geo: lie(skinPart), mat: flesh, tint: true }]);
@@ -759,7 +786,9 @@ export function createLife(
     { geo: lie(clothesPart), mat: cloth },
     { geo: towel, mat: cloth, tint: true },
   ]);
-  fleet(root, umbrellas, [{ geo: umbrella, mat: solid("umbrella", THREE.DoubleSide), tint: true }]);
+  fleet(root, umbrellas, [
+    { geo: umbrella, mat: solid("umbrella", THREE.DoubleSide, PERSONAL_M), tint: true },
+  ]);
 
   return {
     update(t) {
