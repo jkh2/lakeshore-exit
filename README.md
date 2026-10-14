@@ -2,7 +2,7 @@
 
 ![Lakeshore Exit key art: a skydiver in freefall over the Chicago lakefront at sunset, with the drop plane, a helicopter, a hot-air balloon and an open canopy over the beach target](docs/key-art.jpg)
 
-<sub>Key art by James Keith Harwood. The cabin music on the ride up (`public/audio/cabin.mp3`) was supplied by James Keith Harwood.</sub>
+<sub>Key art by James Keith Harwood. Cabin music (`public/audio/cabin.mp3`) by James Keith Harwood, made with Suno.</sub>
 
 First-person skydiving over the Chicago lakefront. Ride a Twin Otter east of the beach, walk to the door, and exit over Lake Michigan. Pull when you want. If the main fails, cut away and throw the reserve before the hard deck, then fly the canopy back to the sand.
 
@@ -32,6 +32,7 @@ The dev server listens on port 8080.
 - Canopy: A/D turn, W drives, S flares. Face the lake and land into the wind.
 - Low under canopy your shadow shows on the ground ahead of you, the way real jumpers judge height on final.
 - Every jump is scored out of 100 in the debrief: exit, dock, separation, pull altitude, heading, touchdown and accuracy. Your top score is kept.
+- Every jump goes in your logbook: the ride, exit altitude, freefall time, pull, landing and score. Twenty goals earn the A, B, C and D licenses, loosely after the USPA's; nothing is locked behind them. The goals live in `src/game/logbook.ts`.
 - Audible altimeter and a full-screen banner at 4,500 ft. Pull-now at 3,000. Hard deck at 2,000.
 - A bad main is a streamer or a line twist. Cut away, then deploy the reserve. Too low and you go in.
 
@@ -41,4 +42,4 @@ The lakefront is at true scale around the drop zone at 12th Street Beach. Willis
 
 The sky is busy too: airliners passing low and cruising high with contrails, light planes along the shore, a blimp lapping the lakefront, a banner plane over the beach, and now and then an air-show jet team that runs down the shore trailing smoke in the Chicago flag's colors and bursts over the beach. The jump replay gives the team its own shot. See `src/game/airshow.ts` and `src/game/life.ts`.
 
-Best beach landing is saved in the browser.
+Best beach landing, the logbook (the last 100 jumps) and the licenses are saved in the browser.
