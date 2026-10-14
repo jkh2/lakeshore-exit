@@ -25,6 +25,7 @@ import {
   WIND_X,
   WIND_Z,
 } from "./constants";
+import { LOG_MAX, award } from "./logbook";
 import { loadSave, writeSave } from "./save";
 import type { Bridge, Hud, JumpMode, Outcome, Phase, Ride, Suit } from "./types";
 import { EYE_UP, PLAYER_LOOK, createBody, type BodyMode, type BodyPose, type Gesture } from "./body";
@@ -756,6 +757,9 @@ export function mountGame(
   let pullSep: number | null = null;
   let brokeOff = false;
   let exitTime = 0;
+  /** For the logbook: feet at the exit, and seconds from the exit to the pull. */
+  let exitFt: number | null = null;
+  let freefallS: number | null = null;
   let gestureStart = 0;
   let brakeL = 0;
   let brakeR = 0;
@@ -887,7 +891,7 @@ export function mountGame(
     canopy: "none",
     needsLook: false,
     replay: null,
-    save: { bestM: save.bestM, bestScore: save.bestScore, jumps: save.jumps, rides: save.rides },
+    save: { bestM: save.bestM, bestScore: save.bestScore, jumps: save.jumps, rides: save.rides, goals: { ...save.goals } },
   };
 
   function persist() {
@@ -896,6 +900,7 @@ export function mountGame(
       bestScore: save.bestScore,
       jumps: save.jumps,
       rides: save.rides,
+      goals: { ...save.goals },
     };
     writeSave(save);
   }
@@ -927,6 +932,8 @@ export function mountGame(
     flashText = "";
     cloudLogged = false;
     pullFt = null;
+    exitFt = null;
+    freefallS = null;
     pullSep = null;
     canopy.visible = false;
     streamer.visible = false;
@@ -1107,13 +1114,47 @@ export function mountGame(
   }
 
   /** Scores the jump and keeps the best. Called once per jump, as it ends. */
-  function score(facts: Omit<Outcome, "log" | "reason" | "score">) {
+  function score(facts: Omit<Outcome, "log" | "reason" | "score" | "n" | "earned" | "licensed">) {
     const result = scoreJump({ ...facts, dockedFt, pullFt, sepM: pullSep, running: ranOff });
     if (facts.kind !== "impact" && result.total > (save.bestScore ?? 0)) {
       result.newBest = true;
       save.bestScore = result.total;
     }
     return result;
+  }
+
+  /** Writes the jump into the logbook and checks it against the license goals. */
+  function logJump(o: Outcome) {
+    save.log.push({
+      n: o.n,
+      at: Date.now(),
+      ride: o.ride,
+      suit: o.suit,
+      mode: o.mode,
+      light: bridge.light,
+      exitFt,
+      freefallS: freefallS === null ? null : Math.round(freefallS * 10) / 10,
+      pullFt: pullFt === null ? null : Math.round(pullFt),
+      kind: o.kind,
+      area: o.area,
+      from: o.from,
+      roof: o.roof,
+      distM: Math.round(o.distanceM * 10) / 10,
+      padM: o.padM === null ? null : Math.round(o.padM * 10) / 10,
+      score: o.score.total,
+      stars: o.score.stars,
+      reserve: o.usedReserve,
+    });
+    if (save.log.length > LOG_MAX) save.log.splice(0, save.log.length - LOG_MAX);
+    const got = award(save.goals, { ...o, score: o.score.total, jumps: save.jumps, dockedFt, pullFt }, o.n);
+    o.earned = got.earned.map((g) => ({ title: g.title, license: g.license }));
+    o.licensed = got.licensed;
+    // A chime for a goal, the full arpeggio for a license.
+    if (o.kind !== "impact") {
+      if (got.licensed) audio.sweep();
+      else if (got.earned.length > 0) audio.ring(5);
+    }
+    return o;
   }
 
   function finishImpact(reason: string) {
@@ -1143,7 +1184,7 @@ export function mountGame(
       hot: true,
       onBeach: false,
     };
-    outcome = { ...facts, log: log.slice(), reason, score: score(facts) };
+    outcome = logJump({ ...facts, log: log.slice(), reason, score: score(facts), n: save.jumps, earned: [], licensed: null });
     audio.update(0, 0, 0);
     audio.death();
     persist();
@@ -1181,7 +1222,15 @@ export function mountGame(
       hot,
       onBeach,
     };
-    outcome = { ...facts, log: log.slice(), reason: water ? "Water" : "", score: score(facts) };
+    outcome = logJump({
+      ...facts,
+      log: log.slice(),
+      reason: water ? "Water" : "",
+      score: score(facts),
+      n: save.jumps,
+      earned: [],
+      licensed: null,
+    });
     if (!water) {
       save.rides += 1;
       if (onBeach && (save.bestM === null || dist < save.bestM)) save.bestM = Math.round(dist * 10) / 10;
@@ -1222,12 +1271,12 @@ export function mountGame(
     if (suit === "wing") {
       // Wingsuiters leave last, after the belly flyers, and fly away on their own.
       resetFormation();
-      exitTime = simTime;
+      markExit();
       startWing(bodyYaw);
     } else if (ringsOn) {
       // The rings instead of the formation: you leave on your own and the course is below you.
       resetFormation();
-      exitTime = simTime;
+      markExit();
       layRings("flat", 230);
     } else {
       _v2.set(1, 0, 0).applyQuaternion(plane.quaternion);
@@ -1247,9 +1296,15 @@ export function mountGame(
     suitFlying = false;
   }
 
+  /** The moment you leave: starts the freefall clock and notes the height for the logbook. */
+  function markExit() {
+    exitTime = simTime;
+    exitFt = Math.round(pos.y * FT_PER_M);
+  }
+
   function startFormation(out: THREE.Vector3) {
     resetFormation();
-    exitTime = simTime;
+    markExit();
     formation.exit(pos, vel, out, bodyYaw);
   }
 
@@ -1359,6 +1414,7 @@ export function mountGame(
     }
     heading = bodyYaw;
     if (base || deadAir) delayS = simTime - exitTime;
+    freefallS = simTime - exitTime;
     pushLog(
       `Pull at ${Math.round(alt).toLocaleString("en-US")} ft${base || deadAir ? ` · ${(delayS ?? 0).toFixed(1)} s delay` : ""}`,
     );
@@ -1450,7 +1506,7 @@ export function mountGame(
       bodyYaw = Math.PI;
       bodyPitch = -0.2;
       vel.set(WIND_X, -17, 44 + WIND_Z);
-      exitTime = simTime;
+      markExit();
       startWing(Math.PI);
       if (wing) wing.t = 4;
       canopy.visible = false;
@@ -1958,7 +2014,7 @@ export function mountGame(
     heading = bodyYaw;
     jumpedFrom = roofName;
     ranOff = running;
-    exitTime = simTime;
+    markExit();
     runUp = false;
     save.jumps += 1;
     const ft = Math.round(pos.y * FT_PER_M).toLocaleString("en-US");
@@ -2076,7 +2132,7 @@ export function mountGame(
     heading = bodyYaw;
     leftOnRed = fromHeli && !cleared;
     leftAt = simTime;
-    exitTime = simTime;
+    markExit();
     save.jumps += 1;
     const ft = Math.round(pos.y * FT_PER_M).toLocaleString("en-US");
     pushLog(

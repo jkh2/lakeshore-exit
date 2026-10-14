@@ -1,4 +1,5 @@
 import { DEFAULT_EXIT_FT, DEFAULT_HOP_FT, DEFAULT_MAL_PCT, SAVE_KEY, isLight, isPadId, isRide } from "./constants";
+import { cleanGoals, cleanLog } from "./logbook";
 import type { Save } from "./types";
 
 export function defaultSave(): Save {
@@ -16,6 +17,8 @@ export function defaultSave(): Save {
     roof: "southloop",
     suit: "rig",
     rings: false,
+    log: [],
+    goals: {},
   };
 }
 
@@ -41,6 +44,8 @@ export function loadSave(): Save {
       roof: isPadId(parsed.roof) ? parsed.roof : base.roof,
       suit: parsed.suit === "wing" ? "wing" : "rig",
       rings: parsed.rings === true,
+      log: cleanLog(parsed.log),
+      goals: cleanGoals(parsed.goals),
     };
   } catch {
     return defaultSave();

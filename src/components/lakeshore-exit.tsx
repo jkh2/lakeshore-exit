@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cardinal, describeOutcome } from "@/game/grade";
 import { loadSave, writeSave } from "@/game/save";
+import { EarnedGoals, LicenseCard, LogbookPanel } from "@/components/logbook";
 import {
   BASE_HARD_FT,
   BASE_PULL_FT,
@@ -119,7 +120,8 @@ export function LakeshoreExit() {
   const [muted, setMuted] = useState(false);
   const [light, setLight] = useState<Light | null>(null);
   const [bootError, setBootError] = useState("");
-  const [record, setRecord] = useState<Hud["save"]>({ bestM: null, bestScore: null, jumps: 0, rides: 0 });
+  const [record, setRecord] = useState<Hud["save"]>({ bestM: null, bestScore: null, jumps: 0, rides: 0, goals: {} });
+  const [logbook, setLogbook] = useState(false);
 
   const cache = useRef({
     phase: "menu" as Phase,
@@ -136,6 +138,7 @@ export function LakeshoreExit() {
     best: null as number | null,
     bestScore: null as number | null,
     rides: -1,
+    goals: -1,
   });
 
   onFrame.current = (hud) => {
@@ -219,11 +222,19 @@ export function LakeshoreExit() {
       setCanopy(hud.canopy);
     }
     const s = hud.save;
-    if (c.jumps !== s.jumps || c.best !== s.bestM || c.bestScore !== s.bestScore || c.rides !== s.rides) {
+    const goals = Object.keys(s.goals).length;
+    if (
+      c.jumps !== s.jumps ||
+      c.best !== s.bestM ||
+      c.bestScore !== s.bestScore ||
+      c.rides !== s.rides ||
+      c.goals !== goals
+    ) {
       c.jumps = s.jumps;
       c.best = s.bestM;
       c.bestScore = s.bestScore;
       c.rides = s.rides;
+      c.goals = goals;
       setRecord({ ...s });
     }
   };
@@ -247,7 +258,13 @@ export function LakeshoreExit() {
     setRoof(saved.roof);
     setSuit(saved.suit);
     setRings(saved.rings);
-    setRecord({ bestM: saved.bestM, bestScore: saved.bestScore, jumps: saved.jumps, rides: saved.rides });
+    setRecord({
+      bestM: saved.bestM,
+      bestScore: saved.bestScore,
+      jumps: saved.jumps,
+      rides: saved.rides,
+      goals: saved.goals,
+    });
     setLight(saved.light);
   }, []);
 
@@ -752,13 +769,7 @@ export function LakeshoreExit() {
               {START[ride]}
             </button>
             {bootError ? <p className="mt-3 text-sm text-signal">{bootError}</p> : null}
-            {record.jumps > 0 ? (
-              <p className="mt-3 text-sm text-muted">
-                {record.jumps} jumps · {record.rides} rides down
-                {record.bestM !== null ? ` · best ${record.bestM} m` : ""}
-                {record.bestScore !== null ? ` · top score ${record.bestScore}` : ""}
-              </p>
-            ) : null}
+            <LicenseCard record={record} onOpen={() => setLogbook(true)} />
 
             <ul className="mt-4 space-y-1 text-sm text-muted">
               {fromRoof ? (
@@ -863,10 +874,13 @@ export function LakeshoreExit() {
               outcome.kind === "impact" && !watched && "debrief-late",
             )}
           >
-            <p className="font-display text-sm tracking-[0.2em] text-muted">DEBRIEF</p>
+            <p className="font-display text-sm tracking-[0.2em] text-muted">
+              DEBRIEF{outcome.n > 0 ? ` · JUMP ${outcome.n}` : ""}
+            </p>
             <h2 className="mt-1 font-display text-5xl leading-none font-semibold">{copy.title}</h2>
             <p className="mt-3 text-sm leading-relaxed text-muted">{copy.lede}</p>
             <Scorecard score={outcome.score} />
+            <EarnedGoals outcome={outcome} />
             <details className="mt-4 text-sm">
               <summary className="cursor-pointer font-display tracking-widest text-muted">
                 JUMP LOG
@@ -926,6 +940,7 @@ export function LakeshoreExit() {
           </section>
         </div>
       ) : null}
+      {logbook && phase === "menu" ? <LogbookPanel onClose={() => setLogbook(false)} /> : null}
     </main>
   );
 }

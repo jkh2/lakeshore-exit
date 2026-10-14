@@ -1,3 +1,5 @@
+import type { GoalsDone, LicenseId, LogEntry } from "./logbook";
+
 /** Time of day. */
 export type Light = "day" | "golden" | "dusk";
 
@@ -70,6 +72,11 @@ export type Outcome = {
   log: string[];
   reason: string;
   score: JumpScore;
+  /** The jump's number in the logbook. */
+  n: number;
+  /** License goals this jump completed, and the license they finished, if one. */
+  earned: { title: string; license: LicenseId }[];
+  licensed: LicenseId | null;
 };
 
 export type Save = {
@@ -88,6 +95,10 @@ export type Save = {
   suit: Suit;
   /** Fly the ring challenge instead of the formation (or open sky). */
   rings: boolean;
+  /** The logbook, newest jump last. */
+  log: LogEntry[];
+  /** License goals done, by the jump each was done on. */
+  goals: GoalsDone;
 };
 
 export type Bridge = {
@@ -150,7 +161,7 @@ export type Hud = {
   needsLook: boolean;
   /** While a replay plays: the shot's name, the playback speed, how far through it is (0..1) and the altitude on screen. */
   replay: { shot: string; speed: number; progress: number; altFt: number } | null;
-  save: Pick<Save, "bestM" | "bestScore" | "jumps" | "rides">;
+  save: Pick<Save, "bestM" | "bestScore" | "jumps" | "rides" | "goals">;
 };
 
 export function createBridge(): Bridge {
