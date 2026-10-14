@@ -819,6 +819,18 @@ export function LakeshoreExit() {
                 </>
               )}
             </ul>
+
+            <p className="mt-4 border-t border-line pt-3 text-xs text-muted">
+              © 2026 James Keith Harwood II. All rights reserved.{" "}
+              <a
+                className="whitespace-nowrap underline underline-offset-2"
+                href={`${import.meta.env.BASE_URL}THIRD-PARTY-NOTICES.txt`}
+                target="_blank"
+                rel="noopener"
+              >
+                Open-source notices
+              </a>
+            </p>
           </div>
         </aside>
       ) : null}

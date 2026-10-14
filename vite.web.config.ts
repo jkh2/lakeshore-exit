@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { thirdPartyNotices } from "./scripts/third-party-notices.mjs";
 
 // Static build of the game for GitHub Pages (`npm run build:web` → dist-web/).
 // `base: "./"` makes every asset URL relative, so the same output works at a
@@ -16,6 +17,7 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     viteReact(),
+    thirdPartyNotices("Lakeshore Exit: third-party notices"),
     {
       // public/__grok is the Grok preview's install tutorial; not part of the game.
       name: "drop-grok-files",

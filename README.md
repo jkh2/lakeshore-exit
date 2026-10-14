@@ -43,3 +43,7 @@ The lakefront is at true scale around the drop zone at 12th Street Beach. Willis
 The sky is busy too: airliners passing low and cruising high with contrails, light planes along the shore, a blimp lapping the lakefront, a banner plane over the beach, and now and then an air-show jet team that runs down the shore trailing smoke in the Chicago flag's colors and bursts over the beach. The jump replay gives the team its own shot. See `src/game/airshow.ts` and `src/game/life.ts`.
 
 Best beach landing, the logbook (the last 100 jumps) and the licenses are saved in the browser.
+
+## License
+
+Copyright © 2026 James Keith Harwood II. All rights reserved. Lakeshore Exit is not open source: you may play the published game, but you may not copy, host, modify or distribute it without written permission. See `LICENSE`. Third-party code and assets keep their own licenses; see `CREDITS.md`, and `THIRD-PARTY-NOTICES.txt` in each web build.
